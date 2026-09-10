@@ -1,0 +1,84 @@
+version: "3"
+set: [pipefail]
+vars:
+  PROFILE: '{{default "local-kind" .PROFILE}}'
+  PROJECT_NAME: '{{default "tadoss" .PROJECT_NAME}}'
+  ENV: '{{default .PROFILE .ENV}}'
+  KUBECONFIG: '{{default (printf ".local/%s.kubeconfig" .PROJECT_NAME) .KUBECONFIG}}'
+env:
+  TADOSS_PROFILE: '{{.PROFILE}}'
+  TADOSS_CLUSTER: '{{.PROJECT_NAME}}'
+  TADOSS_ENVIRONMENT: '{{.ENV}}'
+  TADOSS_KUBECONFIG: '{{.KUBECONFIG}}'
+tasks:
+  default:
+    cmds: [task --list]
+  setup:
+    desc: Install development dependencies
+    cmds: [uv sync --frozen]
+  deps:
+    desc: Start local PostgreSQL
+    cmds: [aqua exec -- docker-cli-plugin-docker-compose up -d --wait db]
+  dev:
+    desc: Run the local API against PostgreSQL
+    deps: [deps]
+    env:
+      TADOSS_DEV: "true"
+    cmds: [uv run tadoss]
+  check:
+    desc: Lint and test the API, operator and charts
+    cmds:
+      - uv run ruff check .
+      - uv run ruff format --check .
+      - uv run python -m unittest discover -s tests -v
+      - task: operator:test
+      - helm lint deploy/charts/tadoss-operator
+      - helm lint deploy/platform/charts/config
+      - task: manifests:check
+  manifests:check:
+    desc: Render profiles and validate native Chainsaw tests
+    cmds:
+      - for: [local-kind, edge, single-server, multi-server]
+        cmd: kubectl kustomize deploy/environments/{{.ITEM}} | kubeconform -strict -summary -ignore-missing-schemas
+      - chainsaw lint configuration -f operator/test/chainsaw/configuration.yaml
+      - for test in operator/test/chainsaw/*/*/chainsaw-test.yaml; do chainsaw lint test -f "$test" || exit; done
+
+  operator:generate:
+    desc: Regenerate CRDs, deepcopy code and RBAC
+    dir: operator
+    cmds: [make generate]
+  operator:test:
+    desc: Test the operator's resource and lifecycle logic
+    dir: operator
+    cmds: [go test ./...]
+  kind:up:
+    desc: Build images and deploy the selected profile on Kind
+    cmds: [python3 scripts/deploy.py kind-up]
+  kind:test:
+    desc: Deploy on Kind and run Chainsaw
+    cmds:
+      - task: kind:up
+      - task: operator:e2e:chainsaw
+  kind:down:
+    desc: Delete this project's disposable Kind cluster and its data
+    cmds: [python3 scripts/deploy.py kind-down]
+  operator:e2e:chainsaw:
+    desc: Run native Chainsaw lifecycle tests on the selected cluster
+    cmds: [python3 scripts/deploy.py chainsaw]
+  env:init:
+    desc: Create an environment (NAME, PROFILE and DOMAIN)
+    requires:
+      vars: [NAME, DOMAIN]
+    env:
+      TADOSS_NEW_ENVIRONMENT: '{{.NAME}}'
+      TADOSS_DOMAIN: '{{.DOMAIN}}'
+    cmds: [python3 scripts/deploy.py env-init]
+  env:apply:
+    desc: Install platform, operator and instance on an existing cluster
+    cmds: [python3 scripts/deploy.py env-apply]
+  env:wait:
+    desc: Wait for the selected instance to become ready
+    cmds: [python3 scripts/deploy.py wait]
+  env:summary:
+    desc: Show the instance endpoint and credential Secret name
+    cmds: [python3 scripts/deploy.py summary]

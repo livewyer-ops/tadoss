@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:18.4
+    environment:
+      POSTGRES_USER: tadoss
+      POSTGRES_PASSWORD: tadoss
+      POSTGRES_DB: tadoss
+    ports:
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - tadoss-postgres:/var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U tadoss -d tadoss"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  tadoss:
+    profiles: [app]
+    build: .
+    image: livewyer/tadoss-api:0.1.0
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      TADOSS_TOKEN: ${TADOSS_TOKEN:-}
+      TADOSS_DATABASE: postgresql://tadoss:tadoss@db:5432/tadoss
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+volumes:
+  tadoss-postgres:

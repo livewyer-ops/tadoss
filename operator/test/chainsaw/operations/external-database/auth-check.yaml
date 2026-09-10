@@ -1,0 +1,33 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: check-rotated-token
+spec:
+  backoffLimit: 4
+  activeDeadlineSeconds: 180
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: check
+          image: ($values.apiImage)
+          command: [python, /check/check.py]
+          env:
+            - name: MODE
+              value: auth
+            - name: API_URL
+              value: http://external-api:8000
+            - name: OLD_TOKEN
+              value: test-only-initial-token
+            - name: TADOSS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: custom-token
+                  key: token
+          volumeMounts:
+            - name: check
+              mountPath: /check
+      volumes:
+        - name: check
+          configMap:
+            name: api-check

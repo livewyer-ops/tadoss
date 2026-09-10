@@ -1,0 +1,28 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: verify
+spec:
+  backoffLimit: 4
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: check
+          image: ($values.apiImage)
+          command: [python, /check/check.py]
+          env:
+            - name: MODE
+              value: verify
+            - name: TADOSS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: journey-api-token
+                  key: token
+          volumeMounts:
+            - name: check
+              mountPath: /check
+      volumes:
+        - name: check
+          configMap:
+            name: api-check

@@ -1,0 +1,118 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: external-database-and-token-rotation
+spec:
+  steps:
+    - name: validate-and-wait-for-credentials
+      try:
+        - apply:
+            resource:
+              apiVersion: tadoss.livewyer.io/v1alpha1
+              kind: Tadoss
+              metadata:
+                name: invalid
+              spec:
+                database:
+                  provider: external
+            expect:
+              - check:
+                  ($error != null): true
+        - apply:
+            file: database.yaml
+        - assert:
+            resource:
+              apiVersion: postgresql.cnpg.io/v1
+              kind: Cluster
+              metadata:
+                name: external-db
+              status:
+                readyInstances: 1
+        - apply:
+            resource:
+              apiVersion: tadoss.livewyer.io/v1alpha1
+              kind: Tadoss
+              metadata:
+                name: external
+              spec:
+                image: ($values.apiImage)
+                replicas: 2
+                deletionProtection: false
+                database:
+                  provider: external
+                  existingSecret: external-db-app
+                tokenSecret: custom-token
+        - assert:
+            resource:
+              apiVersion: tadoss.livewyer.io/v1alpha1
+              kind: Tadoss
+              metadata:
+                name: external
+              status:
+                conditions:
+                  - type: Ready
+                    status: "False"
+                    reason: TokenSecretMissing
+        - apply:
+            resource:
+              apiVersion: v1
+              kind: Secret
+              metadata:
+                name: custom-token
+              stringData:
+                token: test-only-initial-token
+        - assert:
+            resource:
+              apiVersion: tadoss.livewyer.io/v1alpha1
+              kind: Tadoss
+              metadata:
+                name: external
+              status:
+                phase: Ready
+                readyReplicas: 2
+                databaseSecret: external-db-app
+                tokenSecret: custom-token
+    - name: rotate-and-verify
+      try:
+        - patch:
+            resource:
+              apiVersion: v1
+              kind: Secret
+              metadata:
+                name: custom-token
+                namespace: ($namespace)
+              stringData:
+                token: test-only-rotated-token
+        - apply:
+            file: ../../fixtures/api-check.yaml
+        - apply:
+            file: auth-check.yaml
+        - assert:
+            resource:
+              apiVersion: batch/v1
+              kind: Job
+              metadata:
+                name: check-rotated-token
+              status:
+                succeeded: 1
+        - delete:
+            ref:
+              apiVersion: tadoss.livewyer.io/v1alpha1
+              kind: Tadoss
+              name: external
+        - assert:
+            resource:
+              apiVersion: postgresql.cnpg.io/v1
+              kind: Cluster
+              metadata:
+                name: external-db
+                (ownerReferences == null || length(ownerReferences) == `0`): true
+              status:
+                readyInstances: 1
+        - assert:
+            resource:
+              apiVersion: v1
+              kind: Secret
+              metadata:
+                name: custom-token
+                (ownerReferences == null || length(ownerReferences) == `0`): true

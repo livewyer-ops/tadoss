@@ -1,0 +1,13 @@
+image:
+  repository: livewyer/tadoss-operator
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+replicas: 1
+watchNamespaces: []
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi

@@ -1,0 +1,22 @@
+{{- if ne .Values.tls.mode "existing" }}
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ .Values.tls.issuerName }}
+spec:
+  {{- if eq .Values.tls.mode "selfSigned" }}
+  selfSigned: {}
+  {{- else if eq .Values.tls.mode "acme" }}
+  acme:
+    email: {{ required "tls.email is required for ACME" .Values.tls.email | quote }}
+    server: https://acme-v02.api.letsencrypt.org/directory
+    privateKeySecretRef:
+      name: {{ .Values.tls.issuerName }}-account
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: traefik
+  {{- else }}
+  {{- fail "tls.mode must be existing, selfSigned or acme" }}
+  {{- end }}
+{{- end }}

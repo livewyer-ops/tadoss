@@ -1,0 +1,5 @@
+apiVersion: v2
+name: tadoss-platform-config
+description: TLS issuer configuration for TADOSS
+type: application
+version: 0.1.0

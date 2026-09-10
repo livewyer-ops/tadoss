@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-check
+data:
+  check.py: |
+    import json, os, sys
+    from urllib.request import Request, urlopen
+    from urllib.error import HTTPError
+    base = os.getenv('API_URL', 'http://journey-api:8000')
+    token = os.environ['TADOSS_TOKEN']
+    def request(method, path, body=None):
+        data = json.dumps(body).encode() if body is not None else None
+        with urlopen(Request(base+path, data, {'Authorization': 'Bearer '+token, 'Content-Type': 'application/json'}, method=method), timeout=10) as response:
+            data = response.read()
+            return json.loads(data) if data else None
+    if os.environ['MODE'] == 'auth':
+        request('GET', '/tracks')
+        try:
+            urlopen(Request(base+'/tracks', headers={'Authorization':'Bearer '+os.environ['OLD_TOKEN']}), timeout=10)
+        except HTTPError as error:
+            assert error.code == 401
+        else:
+            raise AssertionError('Old token was accepted after rotation')
+        print('Rotated token accepted, old token rejected')
+        sys.exit(0)
+    schema = 'adb87970-b03a-4266-b5d8-f3f6541fb73a'
+    track = '20992138-abdb-4daf-84f3-a0e07dabb5ca'
+    event = '6cfeb3b9-fb8a-41a1-a36f-275848d05c30'
+    if os.environ['MODE'] == 'seed':
+        request('PUT','/schemas/'+schema,{'id':schema,'schema':{'type':'object','required':['text'],'properties':{'text':{'type':'string'}}}})
+        request('PUT','/tracks/'+track,{'id':track,'schema_id':schema,'timeline_reference':{'entity_id':'tams://tamoss.example.com/sources/'+track},'allow_overlaps':False})
+        result=request('POST','/tracks/'+track+'/events',[{'id':event,'timerange':'[10000000000:1_10000000000:2)','payload':{'text':'Persisted'}},{'timerange':'[0:0_1:0)','payload':{'text':42}}])
+        assert [r['http_status_code'] for r in result['responses']] == [201,400], result
+    events=request('GET','/tracks/'+track+'/events')
+    assert len(events)==1 and events[0]['payload']['text']=='Persisted', events
+    assert events[0]['timerange']=='[10000000000:1_10000000000:2)', events
+    try:
+        urlopen(base+'/tracks', timeout=5)
+    except HTTPError as error:
+        assert error.code==401
+    else:
+        raise AssertionError('Unauthenticated access was accepted')
+    print('API validation and persistence passed')

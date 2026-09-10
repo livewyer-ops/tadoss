@@ -1,0 +1,43 @@
+apiVersion: tadoss.livewyer.io/v1alpha1
+kind: Tadoss
+metadata:
+  name: journey
+status:
+  phase: Ready
+  readyReplicas: 1
+  tokenSecret: journey-api-token
+  databaseSecret: journey-db-app
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: Available
+---
+apiVersion: apps/v1
+kind: Deployment
+(status.observedGeneration == metadata.generation): true
+metadata:
+  name: journey-api
+  ownerReferences:
+    - apiVersion: tadoss.livewyer.io/v1alpha1
+      kind: Tadoss
+      name: journey
+      controller: true
+spec:
+  replicas: 1
+  template:
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: api
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: journey-db
+spec:
+  instances: 1
+status:
+  readyInstances: 1

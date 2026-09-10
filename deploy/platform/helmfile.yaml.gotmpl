@@ -1,0 +1,52 @@
+repositories:
+  - name: cloudnative-pg
+    url: https://cloudnative-pg.github.io/charts
+  - name: traefik
+    url: https://traefik.github.io/charts
+  - name: jetstack
+    url: https://charts.jetstack.io
+
+helmDefaults:
+  createNamespace: true
+  wait: true
+  waitForJobs: true
+  timeout: 600
+
+releases:
+{{ if .Values.cnpg.enabled }}
+  - name: cnpg
+    namespace: cnpg-system
+    chart: cloudnative-pg/cloudnative-pg
+    version: 0.28.2
+    values:
+      - fullnameOverride: cnpg-controller-manager
+        crds:
+          create: true
+{{ end }}
+{{ if .Values.traefik.enabled }}
+  - name: traefik
+    namespace: traefik
+    chart: traefik/traefik
+    version: 40.2.0
+    values:
+      - {{ toYaml .Values.traefik.values | nindent 8 }}
+{{ end }}
+{{ if .Values.certManager.enabled }}
+  - name: cert-manager
+    namespace: cert-manager
+    chart: jetstack/cert-manager
+    version: v1.20.2
+    values:
+      - crds:
+          enabled: true
+{{ end }}
+  - name: tadoss-platform-config
+    namespace: tadoss-platform
+    chart: ./charts/config
+{{- if .Values.certManager.enabled }}
+    needs:
+      - cert-manager/cert-manager
+{{- end }}
+    values:
+      - tls:
+          {{- toYaml .Values.tls | nindent 10 }}

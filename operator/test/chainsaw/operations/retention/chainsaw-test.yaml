@@ -1,0 +1,67 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: deletion-protection-and-retention
+  labels:
+    test.tadoss.io/domain: operations
+    test.tadoss.io/tier: standard
+spec:
+  steps:
+    - name: protected-instance-retains-database
+      try:
+        - apply:
+            resource:
+              apiVersion: tadoss.livewyer.io/v1alpha1
+              kind: Tadoss
+              metadata:
+                name: protected
+              spec:
+                image: ($values.apiImage)
+                deletionProtection: true
+                deletionPolicy: Retain
+        - assert:
+            resource:
+              apiVersion: tadoss.livewyer.io/v1alpha1
+              kind: Tadoss
+              metadata:
+                name: protected
+              status:
+                phase: Ready
+        - delete:
+            ref:
+              apiVersion: tadoss.livewyer.io/v1alpha1
+              kind: Tadoss
+              name: protected
+            expect:
+              - check:
+                  ($error != null): true
+        - assert:
+            resource:
+              apiVersion: tadoss.livewyer.io/v1alpha1
+              kind: Tadoss
+              metadata:
+                name: protected
+                (deletionTimestamp == null): true
+        - patch:
+            resource:
+              apiVersion: tadoss.livewyer.io/v1alpha1
+              kind: Tadoss
+              metadata:
+                name: protected
+                namespace: ($namespace)
+              spec:
+                deletionProtection: false
+        - delete:
+            ref:
+              apiVersion: tadoss.livewyer.io/v1alpha1
+              kind: Tadoss
+              name: protected
+        - assert:
+            resource:
+              apiVersion: postgresql.cnpg.io/v1
+              kind: Cluster
+              metadata:
+                name: protected-db
+                (ownerReferences == null || length(ownerReferences) == `0`): true
+              status:
+                readyInstances: 1

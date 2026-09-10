@@ -1,0 +1,9 @@
+apiVersion: tadoss.livewyer.io/v1alpha1
+kind: Tadoss
+metadata:
+  name: journey
+spec:
+  image: ($values.apiImage)
+  profile: local-kind
+  deletionProtection: false
+  deletionPolicy: Delete

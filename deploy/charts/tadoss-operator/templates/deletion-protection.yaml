@@ -1,0 +1,23 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: tadoss-deletion-protection
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [tadoss.livewyer.io]
+        apiVersions: [v1alpha1]
+        operations: [DELETE]
+        resources: [tadosses]
+  validations:
+    - expression: "!oldObject.spec.deletionProtection"
+      message: "Set spec.deletionProtection=false before deleting a Tadoss instance"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: tadoss-deletion-protection
+spec:
+  policyName: tadoss-deletion-protection
+  validationActions: [Deny]

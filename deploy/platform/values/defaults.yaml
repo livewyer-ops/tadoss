@@ -1,0 +1,18 @@
+cnpg:
+  enabled: true
+certManager:
+  enabled: true
+traefik:
+  enabled: true
+  values:
+    deployment:
+      replicas: 1
+    ingressClass:
+      enabled: true
+      name: traefik
+    service:
+      type: LoadBalancer
+tls:
+  mode: existing
+  issuerName: tadoss-public
+  email: ""

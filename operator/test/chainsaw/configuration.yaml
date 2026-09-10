@@ -1,0 +1,15 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Configuration
+metadata:
+  name: tadoss-operator
+spec:
+  parallel: 1
+  timeouts:
+    apply: 1m
+    assert: 8m
+    cleanup: 3m
+    delete: 3m
+    exec: 3m
+  reportFormat: JUNIT-TEST
+  reportName: operator-chainsaw
+  reportPath: reports

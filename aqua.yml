@@ -1,0 +1,14 @@
+registries:
+  - type: standard
+    ref: v4.454.0
+packages:
+  - name: go-task/task@v3.46.4
+  - name: astral-sh/uv@0.9.25
+  - name: golang/go@go1.26.5
+  - name: kubernetes-sigs/kind@v0.32.0
+  - name: kubernetes/kubectl@v1.35.0
+  - name: helm/helm@v4.2.0
+  - name: helmfile/helmfile@v1.5.2
+  - name: kyverno/chainsaw@v0.2.15
+  - name: yannh/kubeconform@v0.6.7
+  - name: docker/compose@v5.5.1

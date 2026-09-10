@@ -1,0 +1,12 @@
+traefik:
+  values:
+    service:
+      type: NodePort
+    ports:
+      web:
+        nodePort: 30080
+      websecure:
+        nodePort: 30443
+tls:
+  mode: selfSigned
+  issuerName: tadoss-selfsigned

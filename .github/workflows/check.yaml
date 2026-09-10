@@ -1,0 +1,68 @@
+name: Check
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18.4
+        env:
+          POSTGRES_USER: tadoss
+          POSTGRES_PASSWORD: tadoss
+          POSTGRES_DB: tadoss
+        ports: [15432:5432]
+        options: >-
+          --health-cmd "pg_isready -U tadoss -d tadoss"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: aquaproj/aqua-installer@11dd79b4e498d471a9385aa9fb7f62bb5f52a73c # v4.0.4
+        with:
+          aqua_version: v2.56.3
+          aqua_opts: "-l"
+      - run: uv sync --frozen --python 3.12
+      - run: task check
+      - run: |
+          task operator:generate
+          git diff --exit-code -- operator/api operator/config deploy/charts/tadoss-operator
+  kind:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [local-kind, multi-server]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: aquaproj/aqua-installer@11dd79b4e498d471a9385aa9fb7f62bb5f52a73c # v4.0.4
+        with:
+          aqua_version: v2.56.3
+          aqua_opts: "-l"
+      - run: task kind:test PROFILE=${{ matrix.profile }}
+      - name: Capture diagnostics
+        if: failure()
+        env:
+          KUBECONFIG: .local/tadoss.kubeconfig
+        run: |
+          mkdir -p reports
+          kubectl get nodes,pods,deployments,jobs,tadosses,clusters.postgresql.cnpg.io -A -o wide > reports/resources.txt || true
+          kubectl get events -A --sort-by=.metadata.creationTimestamp > reports/events.txt || true
+          kubectl logs -n tadoss-system deployment/tadoss-operator --all-containers --tail=500 > reports/operator.log || true
+          kind export logs reports/kind --name tadoss || true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: kind-${{ matrix.profile }}
+          path: reports/
+          if-no-files-found: warn
+      - run: task kind:down
+        if: always()

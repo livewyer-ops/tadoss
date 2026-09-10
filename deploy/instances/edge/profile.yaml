@@ -1,0 +1,7 @@
+apiVersion: tadoss.livewyer.io/v1alpha1
+kind: Tadoss
+metadata:
+  name: tadoss
+  namespace: tads
+spec:
+  profile: edge

@@ -1,0 +1,78 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: instance-lifecycle
+  labels:
+    test.tadoss.io/domain: instance
+    test.tadoss.io/tier: smoke
+spec:
+  steps:
+    - name: provision-and-exercise-api
+      try:
+        - apply:
+            file: resources/tadoss.yaml
+        - assert:
+            file: assert/ready.yaml
+        - apply:
+            file: ../../fixtures/api-check.yaml
+        - apply:
+            file: resources/seed.yaml
+        - assert:
+            resource:
+              apiVersion: batch/v1
+              kind: Job
+              metadata:
+                name: seed
+              status:
+                succeeded: 1
+    - name: correct-drift-and-recover-pods
+      try:
+        - patch:
+            resource:
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: journey-api
+                namespace: ($namespace)
+              spec:
+                replicas: 0
+        - assert:
+            file: assert/ready.yaml
+        - delete:
+            ref:
+              apiVersion: v1
+              kind: Pod
+              labels:
+                app.kubernetes.io/instance: journey
+                app.kubernetes.io/name: tadoss
+        - assert:
+            file: assert/ready.yaml
+        - apply:
+            file: resources/verify.yaml
+        - assert:
+            resource:
+              apiVersion: batch/v1
+              kind: Job
+              metadata:
+                name: verify
+              status:
+                succeeded: 1
+    - name: remove-instance-and-owned-resources
+      try:
+        - delete:
+            ref:
+              apiVersion: tadoss.livewyer.io/v1alpha1
+              kind: Tadoss
+              name: journey
+        - wait:
+            apiVersion: apps/v1
+            kind: Deployment
+            name: journey-api
+            for:
+              deletion: {}
+        - wait:
+            apiVersion: postgresql.cnpg.io/v1
+            kind: Cluster
+            name: journey-db
+            for:
+              deletion: {}
