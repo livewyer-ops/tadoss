@@ -169,5 +169,8 @@ rules, blocked deletion and finalizer release on namespace termination.
 `task operator:lint` runs `go vet` and golangci-lint. `task operator:e2e:chainsaw`
 uses actual Kubernetes resources, PostgreSQL and API Jobs. It reads the image
 from the deployed instance, so Kind tests require no published release image.
-Failed tests can leave protected resources behind; their temporary namespaces
-can be inspected before deleting the disposable Kind cluster.
+Tests labelled `test.tadoss.io/profile` run only on that profile; the
+`multi-server` test asserts three database instances, two API replicas spread
+across nodes and a disruption budget. On failure each test captures the
+instance, Jobs, events and the API and operator logs. Temporary namespaces are
+removed on cleanup even when they hold protected instances.

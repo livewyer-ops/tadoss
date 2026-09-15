@@ -197,9 +197,11 @@ tasks:
     vars:
       API_IMAGE:
         sh: kubectl --kubeconfig {{.KUBECONFIG}} -n {{.NAMESPACE}} get tadoss/{{.INSTANCE}} -o jsonpath='{.spec.image}'
+      # Tests labelled with a profile run only on that profile.
+      CHAINSAW_SELECTOR: '{{if eq .PROFILE "multi-server"}}{{else}}--selector=!test.tadoss.io/profile{{end}}'
     cmds:
       - mkdir -p reports/{{.PROFILE}}
-      - chainsaw test --config operator/test/chainsaw/configuration.yaml --test-dir operator/test/chainsaw --report-path reports/{{.PROFILE}} --set-string apiImage={{.API_IMAGE}}
+      - chainsaw test --config operator/test/chainsaw/configuration.yaml --test-dir operator/test/chainsaw --report-path reports/{{.PROFILE}} --set-string apiImage={{.API_IMAGE}} {{.CHAINSAW_SELECTOR}}
 
   env:init:
     desc: Create deploy/environments/NAME.yaml from _example.yaml with DOMAIN as the API host

@@ -1,0 +1,78 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: multi-server-profile
+  labels:
+    test.tadoss.io/domain: instance
+    test.tadoss.io/tier: standard
+    test.tadoss.io/profile: multi-server
+spec:
+  catch:
+    - describe:
+        apiVersion: tadoss.livewyer.io/v1alpha1
+        kind: Tadoss
+    - events: {}
+    - podLogs:
+        namespace: tadoss-system
+        selector: app.kubernetes.io/name=tadoss-operator
+        tail: 100
+  steps:
+    - name: spread-replicas-and-database-instances
+      try:
+        - apply:
+            resource:
+              apiVersion: tadoss.livewyer.io/v1alpha1
+              kind: Tadoss
+              metadata:
+                name: multi
+              spec:
+                image: ($values.apiImage)
+                profile: multi-server
+                deletionProtection: false
+                deletionPolicy: Delete
+                database:
+                  storage: 1Gi
+        - assert:
+            resource:
+              apiVersion: postgresql.cnpg.io/v1
+              kind: Cluster
+              metadata:
+                name: multi-db
+              spec:
+                instances: 3
+              status:
+                readyInstances: 3
+        - assert:
+            resource:
+              apiVersion: tadoss.livewyer.io/v1alpha1
+              kind: Tadoss
+              metadata:
+                name: multi
+              status:
+                phase: Ready
+                readyReplicas: 2
+        - assert:
+            resource:
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: multi-api
+              spec:
+                replicas: 2
+                template:
+                  spec:
+                    (topologySpreadConstraints[0].topologyKey): kubernetes.io/hostname
+        - assert:
+            resource:
+              apiVersion: policy/v1
+              kind: PodDisruptionBudget
+              metadata:
+                name: multi-api
+              spec:
+                minAvailable: 1
+        - script:
+            content: |
+              kubectl -n "$NAMESPACE" get pod -l app.kubernetes.io/instance=multi,app.kubernetes.io/component=api \
+                -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}' | sort -u | wc -l
+            check:
+              (to_number(trim_space($stdout)) >= `2`): true

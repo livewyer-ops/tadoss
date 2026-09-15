@@ -4,24 +4,43 @@ metadata:
   name: api-check
 data:
   check.py: |
-    import json, os, sys
+    import json, os, sys, time
     from urllib.request import Request, urlopen
-    from urllib.error import HTTPError
+    from urllib.error import HTTPError, URLError
     base = os.getenv('API_URL', 'http://journey-api:8000')
     token = os.environ['TADOSS_TOKEN']
+    deadline = time.monotonic() + float(os.getenv('ROLLOUT_TIMEOUT', '240'))
+    def retry(action):
+        # Service endpoints and rollouts settle after the Deployment reports available.
+        while True:
+            try:
+                return action()
+            except (URLError, ConnectionResetError, TimeoutError, AssertionError) as error:
+                if isinstance(error, HTTPError) and error.code < 500:
+                    raise
+                if time.monotonic() > deadline:
+                    raise
+                time.sleep(2)
+    def status(path, headers):
+        try:
+            with urlopen(Request(base+path, headers=headers), timeout=10) as response:
+                return response.status
+        except HTTPError as error:
+            return error.code
     def request(method, path, body=None):
         data = json.dumps(body).encode() if body is not None else None
-        with urlopen(Request(base+path, data, {'Authorization': 'Bearer '+token, 'Content-Type': 'application/json'}, method=method), timeout=10) as response:
-            data = response.read()
-            return json.loads(data) if data else None
+        headers = {'Authorization': 'Bearer '+token, 'Content-Type': 'application/json'}
+        def call():
+            with urlopen(Request(base+path, data, headers, method=method), timeout=10) as response:
+                payload = response.read()
+                return json.loads(payload) if payload else None
+        return retry(call)
     if os.environ['MODE'] == 'auth':
-        request('GET', '/tracks')
-        try:
-            urlopen(Request(base+'/tracks', headers={'Authorization':'Bearer '+os.environ['OLD_TOKEN']}), timeout=10)
-        except HTTPError as error:
-            assert error.code == 401
-        else:
-            raise AssertionError('Old token was accepted after rotation')
+        def rotated():
+            fresh = status('/tracks', {'Authorization': 'Bearer '+token})
+            stale = status('/tracks', {'Authorization': 'Bearer '+os.environ['OLD_TOKEN']})
+            assert (fresh, stale) == (200, 401), f'rotation still in progress: new={fresh} old={stale}'
+        retry(rotated)
         print('Rotated token accepted, old token rejected')
         sys.exit(0)
     schema = 'adb87970-b03a-4266-b5d8-f3f6541fb73a'
@@ -35,10 +54,5 @@ data:
     events=request('GET','/tracks/'+track+'/events')
     assert len(events)==1 and events[0]['payload']['text']=='Persisted', events
     assert events[0]['timerange']=='[10000000000:1_10000000000:2)', events
-    try:
-        urlopen(base+'/tracks', timeout=5)
-    except HTTPError as error:
-        assert error.code==401
-    else:
-        raise AssertionError('Unauthenticated access was accepted')
+    assert retry(lambda: status('/tracks', {})) == 401, 'Unauthenticated access was accepted'
     print('API validation and persistence passed')

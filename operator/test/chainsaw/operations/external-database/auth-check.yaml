@@ -4,7 +4,7 @@ metadata:
   name: check-rotated-token
 spec:
   backoffLimit: 4
-  activeDeadlineSeconds: 180
+  activeDeadlineSeconds: 300
   template:
     spec:
       restartPolicy: Never

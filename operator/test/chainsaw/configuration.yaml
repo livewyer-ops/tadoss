@@ -12,4 +12,3 @@ spec:
     exec: 3m
   reportFormat: JUNIT-TEST
   reportName: operator-chainsaw
-  reportPath: reports

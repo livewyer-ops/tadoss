@@ -3,6 +3,21 @@ kind: Test
 metadata:
   name: external-database-and-token-rotation
 spec:
+  catch:
+    - describe:
+        apiVersion: tadoss.livewyer.io/v1alpha1
+        kind: Tadoss
+    - get:
+        apiVersion: batch/v1
+        kind: Job
+    - events: {}
+    - podLogs:
+        selector: app.kubernetes.io/name=tadoss
+        tail: 100
+    - podLogs:
+        namespace: tadoss-system
+        selector: app.kubernetes.io/name=tadoss-operator
+        tail: 100
   steps:
     - name: validate-and-wait-for-credentials
       try:
@@ -83,6 +98,17 @@ spec:
                 namespace: ($namespace)
               stringData:
                 token: test-only-rotated-token
+        - assert:
+            resource:
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: external-api
+              (status.observedGeneration == metadata.generation): true
+              (metadata.generation >= `2`): true
+              status:
+                updatedReplicas: 2
+                availableReplicas: 2
         - apply:
             file: ../../fixtures/api-check.yaml
         - apply:

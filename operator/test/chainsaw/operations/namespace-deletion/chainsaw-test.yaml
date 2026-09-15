@@ -6,6 +6,21 @@ metadata:
     test.tadoss.io/domain: operations
     test.tadoss.io/tier: standard
 spec:
+  catch:
+    - describe:
+        apiVersion: tadoss.livewyer.io/v1alpha1
+        kind: Tadoss
+    - get:
+        apiVersion: batch/v1
+        kind: Job
+    - events: {}
+    - podLogs:
+        selector: app.kubernetes.io/name=tadoss
+        tail: 100
+    - podLogs:
+        namespace: tadoss-system
+        selector: app.kubernetes.io/name=tadoss-operator
+        tail: 100
   steps:
     - name: delete-namespace-with-protected-instance
       try:

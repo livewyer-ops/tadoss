@@ -3,7 +3,7 @@ kind: Job
 metadata:
   name: seed
 spec:
-  backoffLimit: 0
+  backoffLimit: 3
   template:
     spec:
       restartPolicy: Never

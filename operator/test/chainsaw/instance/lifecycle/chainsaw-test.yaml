@@ -6,6 +6,21 @@ metadata:
     test.tadoss.io/domain: instance
     test.tadoss.io/tier: smoke
 spec:
+  catch:
+    - describe:
+        apiVersion: tadoss.livewyer.io/v1alpha1
+        kind: Tadoss
+    - get:
+        apiVersion: batch/v1
+        kind: Job
+    - events: {}
+    - podLogs:
+        selector: app.kubernetes.io/name=tadoss
+        tail: 100
+    - podLogs:
+        namespace: tadoss-system
+        selector: app.kubernetes.io/name=tadoss-operator
+        tail: 100
   steps:
     - name: provision-and-exercise-api
       try:
@@ -74,5 +89,11 @@ spec:
             apiVersion: postgresql.cnpg.io/v1
             kind: Cluster
             name: journey-db
+            for:
+              deletion: {}
+        - wait:
+            apiVersion: v1
+            kind: PersistentVolumeClaim
+            selector: cnpg.io/cluster=journey-db
             for:
               deletion: {}

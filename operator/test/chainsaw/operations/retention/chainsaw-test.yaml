@@ -6,6 +6,21 @@ metadata:
     test.tadoss.io/domain: operations
     test.tadoss.io/tier: standard
 spec:
+  catch:
+    - describe:
+        apiVersion: tadoss.livewyer.io/v1alpha1
+        kind: Tadoss
+    - get:
+        apiVersion: batch/v1
+        kind: Job
+    - events: {}
+    - podLogs:
+        selector: app.kubernetes.io/name=tadoss
+        tail: 100
+    - podLogs:
+        namespace: tadoss-system
+        selector: app.kubernetes.io/name=tadoss-operator
+        tail: 100
   steps:
     - name: protected-instance-retains-database
       try:
@@ -65,3 +80,12 @@ spec:
                 (ownerReferences == null || length(ownerReferences) == `0`): true
               status:
                 readyInstances: 1
+        - assert:
+            resource:
+              apiVersion: v1
+              kind: PersistentVolumeClaim
+              metadata:
+                labels:
+                  cnpg.io/cluster: protected-db
+              status:
+                phase: Bound
