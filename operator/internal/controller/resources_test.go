@@ -7,9 +7,7 @@ import (
 
 	cnpgv1 "github.com/cloudnative-pg/cloudnative-pg/api/v1"
 	tadossv1 "github.com/livewyer-ops/tadoss/operator/api/v1alpha1"
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -36,7 +34,7 @@ func TestProfilesAndCredentialRollouts(t *testing.T) {
 			if replicas(cr) != wantAPI || databaseInstances(cr) != wantDB {
 				t.Fatal("wrong profile defaults")
 			}
-			deployment := workloads(cr, "db", "token", "checksum")[0].(*appsv1.Deployment)
+			deployment := workloads(cr, "db", "token", "checksum").Deployment
 			container := deployment.Spec.Template.Spec.Containers[0]
 			if *deployment.Spec.Replicas != wantAPI || *deployment.Spec.Template.Spec.AutomountServiceAccountToken || !*container.SecurityContext.ReadOnlyRootFilesystem {
 				t.Fatal("invalid workload security or replicas")
@@ -51,7 +49,8 @@ func TestProfilesAndCredentialRollouts(t *testing.T) {
 		})
 	}
 	cr := instance()
-	deployment := workloads(cr, "db", "token", "checksum")[0].(*appsv1.Deployment)
+	set := workloads(cr, "db", "token", "checksum")
+	deployment := set.Deployment
 	if _, ok := deployment.Spec.Selector.MatchLabels[instanceUID]; ok {
 		t.Fatal("the Deployment selector must not depend on the instance UID")
 	}
@@ -60,8 +59,14 @@ func TestProfilesAndCredentialRollouts(t *testing.T) {
 			t.Fatal("the pod template must match the Deployment selector")
 		}
 	}
-	first := schemaJob(cr, "db", "token", "database-v1")
-	service := workloads(cr, "db", "token", "checksum")[1].(*corev1.Service)
+	first := schemaJob(cr, "db", "database-v1")
+	if len(first.Spec.Template.Spec.Containers[0].Env) != 1 || first.Spec.Template.Spec.Containers[0].Env[0].Name != "TADOSS_DATABASE" {
+		t.Fatal("the schema Job must receive only the database URI")
+	}
+	if objects := set.objects(); len(objects) != 2 || objects[0] != client.Object(set.Deployment) || objects[1] != client.Object(set.Service) {
+		t.Fatal("single-replica workloads must be the Deployment then the Service")
+	}
+	service := set.Service
 	matches := true
 	for key, value := range service.Spec.Selector {
 		if first.Spec.Template.Labels[key] != value {
@@ -71,14 +76,19 @@ func TestProfilesAndCredentialRollouts(t *testing.T) {
 	if matches {
 		t.Fatal("API Service must not route requests to schema migration pods")
 	}
-	if first.Name != schemaJob(cr, "db", "rotated-token", "database-v1").Name {
-		t.Fatal("token rotation must not repeat schema migration")
+	if first.Name != schemaJob(cr, "db", "database-v1").Name {
+		t.Fatal("the Job name must be stable for unchanged inputs")
 	}
-	if first.Name == schemaJob(cr, "db", "token", "database-v2").Name {
+	if first.Name == schemaJob(cr, "db", "database-v2").Name {
 		t.Fatal("database credential changes must retry migration")
 	}
+	cr.Spec.Resources = corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("2Gi")}}
+	if first.Name == schemaJob(cr, "db", "database-v1").Name {
+		t.Fatal("resource changes must produce a new Job so a stuck migration can retry")
+	}
+	cr.Spec.Resources = corev1.ResourceRequirements{}
 	cr.Spec.Image = "livewyer/tadoss-api:new"
-	if first.Name == schemaJob(cr, "db", "token", "database-v1").Name {
+	if first.Name == schemaJob(cr, "db", "database-v1").Name {
 		t.Fatal("image upgrades must run their migration")
 	}
 }
@@ -143,7 +153,7 @@ func TestDatabaseAndIngressOverrides(t *testing.T) {
 		t.Fatal("managed database overrides ignored")
 	}
 	cr.Spec.Ingress = tadossv1.IngressSpec{Host: "api.example.com", ClassName: "traefik", TLSSecretName: "tls", ClusterIssuer: "issuer", Annotations: map[string]string{"cert-manager.io/cluster-issuer": "other", "example.com/redirect": "true"}}
-	ingress := workloads(cr, "db", "token", "checksum")[2].(*networkingv1.Ingress)
+	ingress := workloads(cr, "db", "token", "checksum").Ingress
 	if ingress.Annotations["cert-manager.io/cluster-issuer"] != "issuer" || ingress.Annotations["example.com/redirect"] != "true" {
 		t.Fatal("ingress annotations must merge with the issuer annotation winning")
 	}

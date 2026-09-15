@@ -2,6 +2,7 @@ package controller
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"maps"
 
@@ -19,7 +20,36 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-const instanceUID = "tadoss.livewyer.io/instance-uid"
+const (
+	instanceUID = "tadoss.livewyer.io/instance-uid"
+	apiPort     = 8000
+	suffixAPI   = "-api"
+	suffixDB    = "-db"
+	suffixDBApp = "-db-app"
+	suffixToken = "-api-token"
+
+	schemaJobBackoffLimit    = 4
+	schemaJobDeadlineSeconds = 300
+)
+
+// workloadSet holds the API workloads of an instance in apply order.
+type workloadSet struct {
+	Deployment *appsv1.Deployment
+	Service    *corev1.Service
+	Budget     *policyv1.PodDisruptionBudget
+	Ingress    *networkingv1.Ingress
+}
+
+func (w workloadSet) objects() []client.Object {
+	objects := []client.Object{w.Deployment, w.Service}
+	if w.Budget != nil {
+		objects = append(objects, w.Budget)
+	}
+	if w.Ingress != nil {
+		objects = append(objects, w.Ingress)
+	}
+	return objects
+}
 
 func replicas(t *tadossv1.Tadoss) int32 {
 	if t.Spec.Replicas != nil {
@@ -83,7 +113,7 @@ func databaseCluster(t *tadossv1.Tadoss) *cnpgv1.Cluster {
 	}
 	return &cnpgv1.Cluster{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "postgresql.cnpg.io/v1", Kind: "Cluster"},
-		ObjectMeta: metadata(t, "-db"),
+		ObjectMeta: metadata(t, suffixDB),
 		Spec: cnpgv1.ClusterSpec{
 			Instances:            databaseInstances(t),
 			ImageName:            image,
@@ -119,7 +149,7 @@ func pod(t *tadossv1.Tadoss, databaseSecret, tokenSecret string) corev1.PodTempl
 			Containers: []corev1.Container{{
 				Name: "api", Image: t.Spec.Image, ImagePullPolicy: t.Spec.ImagePullPolicy,
 				Env:             []corev1.EnvVar{secretEnv("TADOSS_DATABASE", databaseSecret, "uri"), secretEnv("TADOSS_TOKEN", tokenSecret, "token"), {Name: "TADOSS_AUTO_MIGRATE", Value: "false"}},
-				Ports:           []corev1.ContainerPort{{Name: "http", ContainerPort: 8000}},
+				Ports:           []corev1.ContainerPort{{Name: "http", ContainerPort: apiPort}},
 				Resources:       resources,
 				SecurityContext: &corev1.SecurityContext{AllowPrivilegeEscalation: ptr.To(false), ReadOnlyRootFilesystem: ptr.To(true), Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}},
 				StartupProbe:    probe("/readyz", 30, 2), ReadinessProbe: probe("/readyz", 3, 5), LivenessProbe: probe("/healthz", 3, 10),
@@ -134,41 +164,44 @@ func probe(path string, failures, period int32) *corev1.Probe {
 	return &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: path, Port: intstr.FromString("http")}}, FailureThreshold: failures, PeriodSeconds: period, TimeoutSeconds: 3}
 }
 
-func schemaJob(t *tadossv1.Tadoss, databaseSecret, tokenSecret, checksum string) *batchv1.Job {
-	template := pod(t, databaseSecret, tokenSecret)
+// schemaJob runs the migration once per combination of image, database and pod
+// resources; Job templates are immutable, so any of those changes produces a new Job.
+func schemaJob(t *tadossv1.Tadoss, databaseSecret, checksum string) *batchv1.Job {
+	template := pod(t, databaseSecret, "")
 	template.Labels["app.kubernetes.io/component"] = "schema"
 	template.Spec.RestartPolicy = corev1.RestartPolicyOnFailure
 	container := &template.Spec.Containers[0]
 	container.Name = "schema"
 	container.Command = []string{"python", "-m", "tadoss", "migrate"}
-	container.Env = container.Env[:1]
+	container.Env = []corev1.EnvVar{secretEnv("TADOSS_DATABASE", databaseSecret, "uri")}
 	container.StartupProbe, container.ReadinessProbe, container.LivenessProbe, container.Ports = nil, nil, nil, nil
-	sum := sha256.Sum256([]byte(t.Spec.Image + checksum + string(t.UID)))
+	resources, _ := json.Marshal(container.Resources)
+	sum := sha256.Sum256([]byte(t.Spec.Image + string(t.Spec.ImagePullPolicy) + checksum + string(t.UID) + string(resources)))
 	return &batchv1.Job{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "batch/v1", Kind: "Job"},
 		ObjectMeta: metadata(t, fmt.Sprintf("-schema-%x", sum[:5])),
-		Spec:       batchv1.JobSpec{Template: template, BackoffLimit: ptr.To(int32(4)), ActiveDeadlineSeconds: ptr.To(int64(300))},
+		Spec:       batchv1.JobSpec{Template: template, BackoffLimit: ptr.To(int32(schemaJobBackoffLimit)), ActiveDeadlineSeconds: ptr.To(int64(schemaJobDeadlineSeconds))},
 	}
 }
 
-func workloads(t *tadossv1.Tadoss, databaseSecret, tokenSecret, checksum string) []client.Object {
+func workloads(t *tadossv1.Tadoss, databaseSecret, tokenSecret, checksum string) workloadSet {
 	template := pod(t, databaseSecret, tokenSecret)
 	template.Annotations = map[string]string{"checksum/credentials": checksum}
 	selector := &metav1.LabelSelector{MatchLabels: selectorLabels(t)}
 	if replicas(t) > 1 {
 		template.Spec.TopologySpreadConstraints = []corev1.TopologySpreadConstraint{{MaxSkew: 1, TopologyKey: "kubernetes.io/hostname", WhenUnsatisfiable: corev1.ScheduleAnyway, LabelSelector: selector}}
 	}
-	objects := []client.Object{
-		&appsv1.Deployment{TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"}, ObjectMeta: metadata(t, "-api"), Spec: appsv1.DeploymentSpec{Replicas: ptr.To(replicas(t)), Selector: selector, Template: template}},
-		&corev1.Service{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Service"}, ObjectMeta: metadata(t, "-api"), Spec: corev1.ServiceSpec{Selector: selectorLabels(t), Ports: []corev1.ServicePort{{Name: "http", Port: 8000, TargetPort: intstr.FromString("http")}}}},
+	set := workloadSet{
+		Deployment: &appsv1.Deployment{TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"}, ObjectMeta: metadata(t, suffixAPI), Spec: appsv1.DeploymentSpec{Replicas: ptr.To(replicas(t)), Selector: selector, Template: template}},
+		Service:    &corev1.Service{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Service"}, ObjectMeta: metadata(t, suffixAPI), Spec: corev1.ServiceSpec{Selector: selectorLabels(t), Ports: []corev1.ServicePort{{Name: "http", Port: apiPort, TargetPort: intstr.FromString("http")}}}},
 	}
 	if replicas(t) > 1 {
-		objects = append(objects, &policyv1.PodDisruptionBudget{TypeMeta: metav1.TypeMeta{APIVersion: "policy/v1", Kind: "PodDisruptionBudget"}, ObjectMeta: metadata(t, "-api"), Spec: policyv1.PodDisruptionBudgetSpec{MinAvailable: ptr.To(intstr.FromInt32(1)), Selector: selector}})
+		set.Budget = &policyv1.PodDisruptionBudget{TypeMeta: metav1.TypeMeta{APIVersion: "policy/v1", Kind: "PodDisruptionBudget"}, ObjectMeta: metadata(t, suffixAPI), Spec: policyv1.PodDisruptionBudgetSpec{MinAvailable: ptr.To(intstr.FromInt32(1)), Selector: selector}}
 	}
 	if t.Spec.Ingress.Host != "" {
-		ingress := &networkingv1.Ingress{TypeMeta: metav1.TypeMeta{APIVersion: "networking.k8s.io/v1", Kind: "Ingress"}, ObjectMeta: metadata(t, "-api"), Spec: networkingv1.IngressSpec{
+		ingress := &networkingv1.Ingress{TypeMeta: metav1.TypeMeta{APIVersion: "networking.k8s.io/v1", Kind: "Ingress"}, ObjectMeta: metadata(t, suffixAPI), Spec: networkingv1.IngressSpec{
 			IngressClassName: ptr.To(t.Spec.Ingress.ClassName),
-			Rules:            []networkingv1.IngressRule{{Host: t.Spec.Ingress.Host, IngressRuleValue: networkingv1.IngressRuleValue{HTTP: &networkingv1.HTTPIngressRuleValue{Paths: []networkingv1.HTTPIngressPath{{Path: "/", PathType: ptr.To(networkingv1.PathTypePrefix), Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: t.Name + "-api", Port: networkingv1.ServiceBackendPort{Number: 8000}}}}}}}}},
+			Rules:            []networkingv1.IngressRule{{Host: t.Spec.Ingress.Host, IngressRuleValue: networkingv1.IngressRuleValue{HTTP: &networkingv1.HTTPIngressRuleValue{Paths: []networkingv1.HTTPIngressPath{{Path: "/", PathType: ptr.To(networkingv1.PathTypePrefix), Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: t.Name + suffixAPI, Port: networkingv1.ServiceBackendPort{Number: apiPort}}}}}}}}},
 		}}
 		if t.Spec.Ingress.TLSSecretName != "" {
 			ingress.Spec.TLS = []networkingv1.IngressTLS{{Hosts: []string{t.Spec.Ingress.Host}, SecretName: t.Spec.Ingress.TLSSecretName}}
@@ -180,7 +213,7 @@ func workloads(t *tadossv1.Tadoss, databaseSecret, tokenSecret, checksum string)
 			}
 			ingress.Annotations["cert-manager.io/cluster-issuer"] = t.Spec.Ingress.ClusterIssuer
 		}
-		objects = append(objects, ingress)
+		set.Ingress = ingress
 	}
-	return objects
+	return set
 }

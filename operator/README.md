@@ -87,12 +87,16 @@ upgrade recreates a Deployment that still carries the old selector once, keeping
 its pods running. The schema
 Job must complete before API changes are applied. A failed migration sets
 `Ready=False` with reason `SchemaFailed`; fix the underlying cause and delete
-the failed Job to retry. Changing images creates a new Job and prunes old Jobs
-after success. Pin immutable image tags or digests for reliable upgrades.
+the failed Job to retry. Changing the image, the database credentials or the
+API `resources` creates a new Job and prunes old Jobs after success. Pin
+immutable image tags or digests for reliable upgrades.
 
 Readiness requires all configured managed database instances and API replicas.
 Status includes `observedGeneration`, conditions, endpoint and Secret names;
-it never contains credential values. Multiple API replicas get a disruption
+it never contains credential values. `observedGeneration` reaches
+`metadata.generation` only once that generation is rolled out or has failed, so
+wait on it and then on the `Ready` condition. An emptied generated token Secret
+is refilled; a Secret named by `tokenSecret` is never modified. Multiple API replicas get a disruption
 budget and topology spread constraints.
 
 Deletion protection defaults to true. The chart's admission policy rejects

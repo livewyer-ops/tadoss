@@ -1,6 +1,8 @@
 module github.com/livewyer-ops/tadoss/operator
 
-go 1.26.5
+go 1.26.4
+
+toolchain go1.26.5
 
 require (
 	k8s.io/api v0.36.2

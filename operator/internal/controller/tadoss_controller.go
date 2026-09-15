@@ -32,7 +32,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
-const finalizer = "tadoss.livewyer.io/finalizer"
+const (
+	finalizer  = "tadoss.livewyer.io/finalizer"
+	fieldOwner = "tadoss-operator"
+)
 
 type TadossReconciler struct {
 	client.Client
@@ -68,12 +71,14 @@ func (r *TadossReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if !controllerutil.ContainsFinalizer(t, finalizer) {
 		before := t.DeepCopy()
 		controllerutil.AddFinalizer(t, finalizer)
-		return ctrl.Result{RequeueAfter: time.Second}, r.Patch(ctx, t, client.MergeFrom(before))
+		return ctrl.Result{}, r.Patch(ctx, t, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{}))
 	}
 	result, err := r.reconcile(ctx, t)
 	if err != nil {
 		// Resource errors contain names and API diagnostics, never credential values.
-		_ = r.status(ctx, t, tadossv1.PhaseError, "ReconcileFailed", err.Error(), false)
+		if statusErr := r.status(ctx, t, tadossv1.PhaseError, "ReconcileFailed", err.Error(), false); statusErr != nil {
+			logf.FromContext(ctx).Error(statusErr, "recording the error status")
+		}
 	}
 	return result, err
 }
@@ -85,7 +90,7 @@ func (r *TadossReconciler) reconcile(ctx context.Context, t *tadossv1.Tadoss) (c
 		if err := r.apply(ctx, t, cluster); err != nil {
 			return ctrl.Result{}, err
 		}
-		databaseSecret = t.Name + "-db-app"
+		databaseSecret = t.Name + suffixDBApp
 		if cluster.Status.ReadyInstances < databaseInstances(t) {
 			return r.pending(ctx, t, "DatabasePending", "Waiting for PostgreSQL")
 		}
@@ -113,7 +118,7 @@ func (r *TadossReconciler) reconcile(ctx context.Context, t *tadossv1.Tadoss) (c
 	t.Status.DatabaseSecret, t.Status.TokenSecret = database.Name, token.Name
 	databaseHash := fmt.Sprintf("%x", sha256.Sum256(database.Data["uri"]))
 	checksum := fmt.Sprintf("%x", sha256.Sum256(append(append([]byte(databaseHash), 0), token.Data["token"]...)))
-	job := schemaJob(t, database.Name, token.Name, databaseHash)
+	job := schemaJob(t, database.Name, databaseHash)
 	t.Status.SchemaJob = job.Name
 	liveJob := &batchv1.Job{}
 	err = r.Get(ctx, client.ObjectKeyFromObject(job), liveJob)
@@ -144,13 +149,13 @@ func (r *TadossReconciler) reconcile(ctx context.Context, t *tadossv1.Tadoss) (c
 	if !complete {
 		return r.pending(ctx, t, "SchemaPending", "Waiting for the schema Job")
 	}
-	objects := workloads(t, database.Name, token.Name, checksum)
-	if waiting, err := r.migrateDeployment(ctx, t, objects[0].(*appsv1.Deployment)); err != nil {
+	set := workloads(t, database.Name, token.Name, checksum)
+	if waiting, err := r.migrateDeployment(ctx, t, set.Deployment); err != nil {
 		return ctrl.Result{}, err
 	} else if waiting {
 		return r.pending(ctx, t, "SelectorMigration", "Recreating the API Deployment with a UID-free selector")
 	}
-	for _, object := range objects {
+	for _, object := range set.objects() {
 		if err := r.apply(ctx, t, object); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -158,9 +163,9 @@ func (r *TadossReconciler) reconcile(ctx context.Context, t *tadossv1.Tadoss) (c
 	if err := r.prune(ctx, t, job.Name); err != nil {
 		return ctrl.Result{}, err
 	}
-	deployment := objects[0].(*appsv1.Deployment)
+	deployment := set.Deployment
 	t.Status.ReadyReplicas = deployment.Status.ReadyReplicas
-	t.Status.Endpoint = fmt.Sprintf("http://%s-api.%s.svc.cluster.local:8000", t.Name, t.Namespace)
+	t.Status.Endpoint = fmt.Sprintf("http://%s%s.%s.svc:%d", t.Name, suffixAPI, t.Namespace, apiPort)
 	if t.Spec.Ingress.Host != "" {
 		scheme := "http"
 		if t.Spec.Ingress.TLSSecretName != "" {
@@ -172,14 +177,17 @@ func (r *TadossReconciler) reconcile(ctx context.Context, t *tadossv1.Tadoss) (c
 	if !ready {
 		return r.pending(ctx, t, "RolloutPending", "Waiting for the API rollout")
 	}
-	return ctrl.Result{RequeueAfter: 30 * time.Second}, r.status(ctx, t, tadossv1.PhaseReady, "Available", "Database schema and API are ready", true)
+	if err := r.status(ctx, t, tadossv1.PhaseReady, "Available", "Database schema and API are ready", true); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
 func (r *TadossReconciler) token(ctx context.Context, t *tadossv1.Tadoss) (*corev1.Secret, error) {
 	name := t.Spec.TokenSecret
 	generated := name == ""
 	if generated {
-		name = t.Name + "-api-token"
+		name = t.Name + suffixToken
 	}
 	secret := &corev1.Secret{}
 	err := r.Get(ctx, client.ObjectKey{Namespace: t.Namespace, Name: name}, secret)
@@ -187,20 +195,38 @@ func (r *TadossReconciler) token(ctx context.Context, t *tadossv1.Tadoss) (*core
 		if generated && !metav1.IsControlledBy(secret, t) {
 			return nil, fmt.Errorf("token Secret %s is not owned by this instance", name)
 		}
+		if generated && len(secret.Data["token"]) == 0 {
+			// An emptied generated Secret is refilled; a user-supplied one is left alone.
+			before := secret.DeepCopy()
+			value, err := randomToken()
+			if err != nil {
+				return nil, err
+			}
+			secret.Data = map[string][]byte{"token": value}
+			return secret, r.Patch(ctx, secret, client.MergeFrom(before))
+		}
 		return secret, nil
 	}
 	if !apierrors.IsNotFound(err) || !generated {
 		return nil, err
 	}
-	random := make([]byte, 32)
-	if _, err := rand.Read(random); err != nil {
+	value, err := randomToken()
+	if err != nil {
 		return nil, err
 	}
-	secret = &corev1.Secret{ObjectMeta: metadata(t, "-api-token"), Data: map[string][]byte{"token": []byte(base64.RawURLEncoding.EncodeToString(random))}}
+	secret = &corev1.Secret{ObjectMeta: metadata(t, suffixToken), Data: map[string][]byte{"token": value}}
 	if err := controllerutil.SetControllerReference(t, secret, r.Scheme); err != nil {
 		return nil, err
 	}
 	return secret, r.Create(ctx, secret)
+}
+
+func randomToken() ([]byte, error) {
+	random := make([]byte, 32)
+	if _, err := rand.Read(random); err != nil {
+		return nil, err
+	}
+	return []byte(base64.RawURLEncoding.EncodeToString(random)), nil
 }
 
 // migrateDeployment replaces a Deployment whose immutable selector still carries the
@@ -232,7 +258,11 @@ func (r *TadossReconciler) migrateDeployment(ctx context.Context, t *tadossv1.Ta
 }
 
 func (r *TadossReconciler) apply(ctx context.Context, t *tadossv1.Tadoss, desired client.Object) error {
-	live := desired.DeepCopyObject().(client.Object)
+	empty, err := r.Scheme.New(desired.GetObjectKind().GroupVersionKind())
+	if err != nil {
+		return err
+	}
+	live := empty.(client.Object)
 	if err := r.Get(ctx, client.ObjectKeyFromObject(desired), live); err == nil {
 		if !metav1.IsControlledBy(live, t) {
 			return fmt.Errorf("%s %s is not owned by this instance", desired.GetObjectKind().GroupVersionKind().Kind, desired.GetName())
@@ -243,40 +273,55 @@ func (r *TadossReconciler) apply(ctx context.Context, t *tadossv1.Tadoss, desire
 	if err := controllerutil.SetControllerReference(t, desired, r.Scheme); err != nil {
 		return err
 	}
-	return r.Patch(ctx, desired, client.Apply, client.FieldOwner("tadoss-operator"), client.ForceOwnership)
+	return r.Patch(ctx, desired, client.Apply, client.FieldOwner(fieldOwner), client.ForceOwnership)
 }
 
 func (r *TadossReconciler) prune(ctx context.Context, t *tadossv1.Tadoss, currentJob string) error {
-	candidates := []client.Object{}
+	var stale []client.Object
+	key := client.ObjectKey{Namespace: t.Namespace, Name: t.Name + suffixAPI}
 	if t.Spec.Ingress.Host == "" {
-		candidates = append(candidates, &networkingv1.Ingress{ObjectMeta: metadata(t, "-api")})
+		ingress, err := r.owned(ctx, t, key, &networkingv1.Ingress{})
+		if err != nil {
+			return err
+		}
+		stale = append(stale, ingress)
 	}
 	if replicas(t) == 1 {
-		candidates = append(candidates, &policyv1.PodDisruptionBudget{ObjectMeta: metadata(t, "-api")})
+		budget, err := r.owned(ctx, t, key, &policyv1.PodDisruptionBudget{})
+		if err != nil {
+			return err
+		}
+		stale = append(stale, budget)
 	}
 	jobs := &batchv1.JobList{}
 	if err := r.List(ctx, jobs, client.InNamespace(t.Namespace), client.MatchingLabels{instanceUID: string(t.UID)}); err != nil {
 		return err
 	}
 	for i := range jobs.Items {
-		if jobs.Items[i].Name != currentJob {
-			candidates = append(candidates, &jobs.Items[i])
+		if jobs.Items[i].Name != currentJob && metav1.IsControlledBy(&jobs.Items[i], t) {
+			stale = append(stale, &jobs.Items[i])
 		}
 	}
-	for _, object := range candidates {
-		if err := r.Get(ctx, client.ObjectKeyFromObject(object), object); err != nil {
-			if apierrors.IsNotFound(err) {
-				continue
-			}
-			return err
+	for _, object := range stale {
+		if object == nil {
+			continue
 		}
-		if metav1.IsControlledBy(object, t) {
-			if err := r.Delete(ctx, object, client.PropagationPolicy(metav1.DeletePropagationBackground)); client.IgnoreNotFound(err) != nil {
-				return err
-			}
+		if err := r.Delete(ctx, object, client.PropagationPolicy(metav1.DeletePropagationBackground)); client.IgnoreNotFound(err) != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// owned reads an object into empty and returns it only when this instance controls it.
+func (r *TadossReconciler) owned(ctx context.Context, t *tadossv1.Tadoss, key client.ObjectKey, empty client.Object) (client.Object, error) {
+	if err := r.Get(ctx, key, empty); err != nil {
+		return nil, client.IgnoreNotFound(err)
+	}
+	if !metav1.IsControlledBy(empty, t) {
+		return nil, nil
+	}
+	return empty, nil
 }
 
 func (r *TadossReconciler) finalize(ctx context.Context, t *tadossv1.Tadoss) (ctrl.Result, error) {
@@ -296,7 +341,7 @@ func (r *TadossReconciler) finalize(ctx context.Context, t *tadossv1.Tadoss) (ct
 		return ctrl.Result{RequeueAfter: time.Minute}, nil
 	} else if t.Spec.Database.Provider == tadossv1.ProviderManaged && t.Spec.DeletionPolicy == tadossv1.DeletionPolicyRetain {
 		cluster := &cnpgv1.Cluster{}
-		err := r.Get(ctx, client.ObjectKey{Namespace: t.Namespace, Name: t.Name + "-db"}, cluster)
+		err := r.Get(ctx, client.ObjectKey{Namespace: t.Namespace, Name: t.Name + suffixDB}, cluster)
 		if err != nil && !apierrors.IsNotFound(err) {
 			return ctrl.Result{}, err
 		}
@@ -309,14 +354,14 @@ func (r *TadossReconciler) finalize(ctx context.Context, t *tadossv1.Tadoss) (ct
 				}
 			}
 			cluster.OwnerReferences = owners
-			if err := r.Patch(ctx, cluster, client.MergeFrom(before)); err != nil {
+			if err := r.Patch(ctx, cluster, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
 				return ctrl.Result{}, err
 			}
 		}
 	}
 	before := t.DeepCopy()
 	controllerutil.RemoveFinalizer(t, finalizer)
-	return ctrl.Result{}, r.Patch(ctx, t, client.MergeFrom(before))
+	return ctrl.Result{}, r.Patch(ctx, t, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{}))
 }
 
 // namespaceTerminating reports whether the instance namespace carries a deletion timestamp.
@@ -330,7 +375,10 @@ func (r *TadossReconciler) namespaceTerminating(ctx context.Context, name string
 }
 
 func (r *TadossReconciler) pending(ctx context.Context, t *tadossv1.Tadoss, reason, message string) (ctrl.Result, error) {
-	return ctrl.Result{RequeueAfter: 5 * time.Second}, r.status(ctx, t, tadossv1.PhaseProgressing, reason, message, false)
+	if err := r.status(ctx, t, tadossv1.PhaseProgressing, reason, message, false); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 }
 
 func (r *TadossReconciler) status(ctx context.Context, t *tadossv1.Tadoss, phase, reason, message string, ready bool) error {
@@ -340,7 +388,13 @@ func (r *TadossReconciler) status(ctx context.Context, t *tadossv1.Tadoss, phase
 	}
 	before := live.DeepCopy()
 	live.Status = t.Status
-	live.Status.ObservedGeneration, live.Status.Phase = t.Generation, phase
+	live.Status.Phase = phase
+	// observedGeneration advances only once a generation has been rolled out or has
+	// failed, so waiting on it is meaningful.
+	live.Status.ObservedGeneration = before.Status.ObservedGeneration
+	if ready || phase == tadossv1.PhaseError {
+		live.Status.ObservedGeneration = t.Generation
+	}
 	state := metav1.ConditionFalse
 	if ready {
 		state = metav1.ConditionTrue
@@ -353,6 +407,9 @@ func (r *TadossReconciler) status(ctx context.Context, t *tadossv1.Tadoss, phase
 		return err
 	}
 	old := meta.FindStatusCondition(before.Status.Conditions, tadossv1.ConditionReady)
+	if old == nil || old.Reason != reason {
+		logf.FromContext(ctx).Info("status changed", "phase", phase, "reason", reason, "message", message)
+	}
 	if r.Recorder != nil && (old == nil || old.Reason != reason) {
 		eventType := corev1.EventTypeNormal
 		if phase == tadossv1.PhaseError || reason == "DeletionBlocked" {
@@ -396,7 +453,7 @@ func (r *TadossReconciler) secretRequests(ctx context.Context, object client.Obj
 	}
 	requests := []reconcile.Request{}
 	for _, t := range instances.Items {
-		if object.GetName() == t.Spec.TokenSecret || object.GetName() == t.Name+"-api-token" || object.GetName() == t.Spec.Database.ExistingSecret || object.GetName() == t.Name+"-db-app" {
+		if object.GetName() == t.Spec.TokenSecret || object.GetName() == t.Name+suffixToken || object.GetName() == t.Spec.Database.ExistingSecret || object.GetName() == t.Name+suffixDBApp {
 			requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&t)})
 		}
 	}

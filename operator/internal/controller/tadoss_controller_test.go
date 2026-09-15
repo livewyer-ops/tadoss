@@ -102,7 +102,7 @@ func TestMigrateDeploymentOrphansLegacySelector(t *testing.T) {
 		t.Fatal(err)
 	}
 	cr := instance()
-	desired := workloads(cr, "db", "token", "checksum")[0].(*appsv1.Deployment)
+	desired := workloads(cr, "db", "token", "checksum").Deployment
 	legacy := desired.DeepCopy()
 	legacy.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels(cr)}
 	if err := controllerutil.SetControllerReference(cr, legacy, scheme); err != nil {
@@ -136,5 +136,53 @@ func TestMigrateDeploymentOrphansLegacySelector(t *testing.T) {
 	r = &TadossReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(cr, current).Build(), Scheme: scheme}
 	if waiting, err := r.migrateDeployment(ctx, cr, desired); err != nil || waiting {
 		t.Fatal("a current selector must not be migrated")
+	}
+}
+
+func TestTokenSelfHealsOnlyWhenGenerated(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	cr := instance()
+	emptied := &corev1.Secret{ObjectMeta: metadata(cr, suffixToken), Data: map[string][]byte{"token": nil}}
+	if err := controllerutil.SetControllerReference(cr, emptied, scheme); err != nil {
+		t.Fatal(err)
+	}
+	r := &TadossReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(cr, emptied).Build(), Scheme: scheme}
+	secret, err := r.token(ctx, cr)
+	if err != nil || len(secret.Data["token"]) == 0 {
+		t.Fatalf("emptied generated Secret not refilled: %v", err)
+	}
+	supplied := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "mine", Namespace: "test"}, Data: map[string][]byte{"token": nil}}
+	cr.Spec.TokenSecret = "mine"
+	r = &TadossReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(cr, supplied).Build(), Scheme: scheme}
+	if secret, err := r.token(ctx, cr); err != nil || len(secret.Data["token"]) != 0 {
+		t.Fatal("a user-supplied Secret must not be modified")
+	}
+}
+
+func TestObservedGenerationAdvancesOnlyWhenSettled(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	cr := instance()
+	cr.Generation = 3
+	r := &TadossReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(cr).WithObjects(cr).Build(), Scheme: scheme}
+	current := func() tadossv1.TadossStatus {
+		live := &tadossv1.Tadoss{}
+		if err := r.Get(ctx, client.ObjectKeyFromObject(cr), live); err != nil {
+			t.Fatal(err)
+		}
+		return live.Status
+	}
+	if _, err := r.pending(ctx, cr, "SchemaPending", "waiting"); err != nil {
+		t.Fatal(err)
+	}
+	if status := current(); status.ObservedGeneration != 0 || status.Phase != tadossv1.PhaseProgressing {
+		t.Fatalf("progressing must not advance observedGeneration: %+v", status)
+	}
+	if err := r.status(ctx, cr, tadossv1.PhaseReady, "Available", "ready", true); err != nil {
+		t.Fatal(err)
+	}
+	if status := current(); status.ObservedGeneration != 3 || status.Phase != tadossv1.PhaseReady {
+		t.Fatalf("ready must record the generation: %+v", status)
 	}
 }
