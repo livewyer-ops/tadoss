@@ -5,6 +5,30 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+const (
+	ProviderManaged  = "managed"
+	ProviderExternal = "external"
+
+	DeletionPolicyRetain = "Retain"
+	DeletionPolicyDelete = "Delete"
+
+	ProfileLocalKind    = "local-kind"
+	ProfileEdge         = "edge"
+	ProfileSingleServer = "single-server"
+	ProfileMultiServer  = "multi-server"
+
+	PhaseProgressing = "Progressing"
+	PhaseReady       = "Ready"
+	PhaseError       = "Error"
+
+	ConditionReady = "Ready"
+
+	// DefaultPostgresImage is the CloudNativePG operand used for managed databases.
+	DefaultPostgresImage = "ghcr.io/cloudnative-pg/postgresql:18.4-standard-trixie"
+)
+
+// +kubebuilder:validation:XValidation:rule="!has(self.provider) || self.provider != 'external' || (has(self.existingSecret) && size(self.existingSecret) > 0)",message="external PostgreSQL requires database.existingSecret"
+// +kubebuilder:validation:XValidation:rule="!has(self.provider) || self.provider != 'managed' || !has(self.existingSecret) || size(self.existingSecret) == 0",message="database.existingSecret applies only to provider external"
 type DatabaseSpec struct {
 	// +kubebuilder:validation:Enum=managed;external
 	// +kubebuilder:default=managed
@@ -12,8 +36,13 @@ type DatabaseSpec struct {
 	Provider string `json:"provider,omitempty"`
 	// ExistingSecret contains a PostgreSQL URI in its uri key.
 	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
 	// +optional
 	ExistingSecret string `json:"existingSecret,omitempty"`
+	// Image is the PostgreSQL operand for managed databases.
+	// +kubebuilder:default="ghcr.io/cloudnative-pg/postgresql:18.4-standard-trixie"
+	// +kubebuilder:validation:MinLength=1
+	Image string `json:"image,omitempty"`
 	// +kubebuilder:default="5Gi"
 	// +kubebuilder:validation:Pattern=`^[1-9][0-9]*(Gi|Ti)$`
 	Storage string `json:"storage,omitempty"`
@@ -23,23 +52,38 @@ type DatabaseSpec struct {
 	// +kubebuilder:validation:Maximum=5
 	// +optional
 	Instances *int32 `json:"instances,omitempty"`
+	// Resources of each managed PostgreSQL instance; defaults apply when unset.
+	// +optional
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
+// +kubebuilder:validation:XValidation:rule="!has(self.clusterIssuer) || size(self.clusterIssuer) == 0 || (has(self.tlsSecretName) && size(self.tlsSecretName) > 0)",message="ingress.clusterIssuer requires ingress.tlsSecretName"
 type IngressSpec struct {
 	// +kubebuilder:validation:MaxLength=253
 	// +kubebuilder:validation:Pattern=`^$|^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]*[a-z0-9])?$`
 	// +optional
 	Host string `json:"host,omitempty"`
 	// +kubebuilder:default=traefik
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
 	ClassName string `json:"className,omitempty"`
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
 	// +optional
 	TLSSecretName string `json:"tlsSecretName,omitempty"`
 	// ClusterIssuer enables certificate creation through cert-manager's ingress shim.
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
 	// +optional
 	ClusterIssuer string `json:"clusterIssuer,omitempty"`
+	// Annotations are added to the Ingress, for class-specific behaviour such as
+	// redirects. The cert-manager issuer annotation always wins.
+	// +kubebuilder:validation:MaxProperties=32
+	// +optional
+	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
-// +kubebuilder:validation:XValidation:rule="!has(self.database) || !has(self.database.provider) || self.database.provider != 'external' || (has(self.database.existingSecret) && size(self.database.existingSecret) > 0)",message="external PostgreSQL requires database.existingSecret"
 type TadossSpec struct {
 	// +kubebuilder:validation:Enum=local-kind;edge;single-server;multi-server
 	// +kubebuilder:default=local-kind
@@ -51,6 +95,8 @@ type TadossSpec struct {
 	// +kubebuilder:validation:Enum=Always;IfNotPresent;Never
 	// +kubebuilder:default=IfNotPresent
 	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
+	// Replicas of the API Deployment. The operator owns the Deployment's replica
+	// count, so external autoscalers are reverted on every reconcile.
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=20
 	// +optional
@@ -58,6 +104,8 @@ type TadossSpec struct {
 	// +kubebuilder:default={provider: managed, storage: "5Gi"}
 	Database DatabaseSpec `json:"database,omitempty"`
 	// TokenSecret names an existing Secret with a token key; empty generates one.
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
 	// +optional
 	TokenSecret string `json:"tokenSecret,omitempty"`
 	// +optional
@@ -69,12 +117,14 @@ type TadossSpec struct {
 	DeletionPolicy string `json:"deletionPolicy,omitempty"`
 	// DeletionProtection holds the finalizer until explicitly disabled.
 	// +kubebuilder:default=true
-	DeletionProtection bool `json:"deletionProtection,omitempty"`
+	// +optional
+	DeletionProtection *bool `json:"deletionProtection,omitempty"`
 }
 
 type TadossStatus struct {
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// +kubebuilder:validation:Enum=Progressing;Ready;Error
 	// +optional
 	Phase string `json:"phase,omitempty"`
 	// +optional

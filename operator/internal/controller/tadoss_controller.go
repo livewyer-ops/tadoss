@@ -21,6 +21,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/events"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -69,14 +70,14 @@ func (r *TadossReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	result, err := r.reconcile(ctx, t)
 	if err != nil {
 		// Resource errors contain names and API diagnostics, never credential values.
-		_ = r.status(ctx, t, "Error", "ReconcileFailed", err.Error(), false)
+		_ = r.status(ctx, t, tadossv1.PhaseError, "ReconcileFailed", err.Error(), false)
 	}
 	return result, err
 }
 
 func (r *TadossReconciler) reconcile(ctx context.Context, t *tadossv1.Tadoss) (ctrl.Result, error) {
 	databaseSecret := t.Spec.Database.ExistingSecret
-	if t.Spec.Database.Provider == "managed" {
+	if t.Spec.Database.Provider == tadossv1.ProviderManaged {
 		cluster := databaseCluster(t)
 		if err := r.apply(ctx, t, cluster); err != nil {
 			return ctrl.Result{}, err
@@ -131,7 +132,7 @@ func (r *TadossReconciler) reconcile(ctx context.Context, t *tadossv1.Tadoss) (c
 	complete := false
 	for _, condition := range liveJob.Status.Conditions {
 		if condition.Type == batchv1.JobFailed && condition.Status == corev1.ConditionTrue {
-			return ctrl.Result{}, r.status(ctx, t, "Error", "SchemaFailed", "Schema Job failed; fix the cause and delete the failed Job to retry", false)
+			return ctrl.Result{}, r.status(ctx, t, tadossv1.PhaseError, "SchemaFailed", "Schema Job failed; fix the cause and delete the failed Job to retry", false)
 		}
 		if condition.Type == batchv1.JobComplete && condition.Status == corev1.ConditionTrue {
 			complete = true
@@ -163,7 +164,7 @@ func (r *TadossReconciler) reconcile(ctx context.Context, t *tadossv1.Tadoss) (c
 	if !ready {
 		return r.pending(ctx, t, "RolloutPending", "Waiting for the API rollout")
 	}
-	return ctrl.Result{RequeueAfter: 30 * time.Second}, r.status(ctx, t, "Ready", "Available", "Database schema and API are ready", true)
+	return ctrl.Result{RequeueAfter: 30 * time.Second}, r.status(ctx, t, tadossv1.PhaseReady, "Available", "Database schema and API are ready", true)
 }
 
 func (r *TadossReconciler) token(ctx context.Context, t *tadossv1.Tadoss) (*corev1.Secret, error) {
@@ -252,12 +253,12 @@ func (r *TadossReconciler) finalize(ctx context.Context, t *tadossv1.Tadoss) (ct
 	}
 	if terminating {
 		logf.FromContext(ctx).Info("namespace is terminating; releasing the finalizer regardless of deletionProtection and deletionPolicy")
-	} else if t.Spec.DeletionProtection {
-		if err := r.status(ctx, t, "Progressing", "DeletionBlocked", "Set spec.deletionProtection=false to permit deletion", false); err != nil {
+	} else if ptr.Deref(t.Spec.DeletionProtection, true) {
+		if err := r.status(ctx, t, tadossv1.PhaseProgressing, "DeletionBlocked", "Set spec.deletionProtection=false to permit deletion", false); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{RequeueAfter: time.Minute}, nil
-	} else if t.Spec.Database.Provider == "managed" && t.Spec.DeletionPolicy == "Retain" {
+	} else if t.Spec.Database.Provider == tadossv1.ProviderManaged && t.Spec.DeletionPolicy == tadossv1.DeletionPolicyRetain {
 		cluster := &cnpgv1.Cluster{}
 		err := r.Get(ctx, client.ObjectKey{Namespace: t.Namespace, Name: t.Name + "-db"}, cluster)
 		if err != nil && !apierrors.IsNotFound(err) {
@@ -293,7 +294,7 @@ func (r *TadossReconciler) namespaceTerminating(ctx context.Context, name string
 }
 
 func (r *TadossReconciler) pending(ctx context.Context, t *tadossv1.Tadoss, reason, message string) (ctrl.Result, error) {
-	return ctrl.Result{RequeueAfter: 5 * time.Second}, r.status(ctx, t, "Progressing", reason, message, false)
+	return ctrl.Result{RequeueAfter: 5 * time.Second}, r.status(ctx, t, tadossv1.PhaseProgressing, reason, message, false)
 }
 
 func (r *TadossReconciler) status(ctx context.Context, t *tadossv1.Tadoss, phase, reason, message string, ready bool) error {
@@ -308,17 +309,17 @@ func (r *TadossReconciler) status(ctx context.Context, t *tadossv1.Tadoss, phase
 	if ready {
 		state = metav1.ConditionTrue
 	}
-	meta.SetStatusCondition(&live.Status.Conditions, metav1.Condition{Type: "Ready", Status: state, Reason: reason, Message: message, ObservedGeneration: t.Generation})
+	meta.SetStatusCondition(&live.Status.Conditions, metav1.Condition{Type: tadossv1.ConditionReady, Status: state, Reason: reason, Message: message, ObservedGeneration: t.Generation})
 	if reflect.DeepEqual(before.Status, live.Status) {
 		return nil
 	}
 	if err := r.Status().Patch(ctx, live, client.MergeFrom(before)); err != nil {
 		return err
 	}
-	old := meta.FindStatusCondition(before.Status.Conditions, "Ready")
+	old := meta.FindStatusCondition(before.Status.Conditions, tadossv1.ConditionReady)
 	if r.Recorder != nil && (old == nil || old.Reason != reason) {
 		eventType := corev1.EventTypeNormal
-		if phase == "Error" || reason == "DeletionBlocked" {
+		if phase == tadossv1.PhaseError || reason == "DeletionBlocked" {
 			eventType = corev1.EventTypeWarning
 		}
 		r.Recorder.Eventf(t, nil, eventType, reason, "Reconcile", "%s", message)

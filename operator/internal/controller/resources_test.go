@@ -2,12 +2,15 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	cnpgv1 "github.com/cloudnative-pg/cloudnative-pg/api/v1"
 	tadossv1 "github.com/livewyer-ops/tadoss/operator/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -104,7 +107,8 @@ func TestOwnershipTokenPersistenceAndRetention(t *testing.T) {
 	if err := r.Create(ctx, cluster); err != nil {
 		t.Fatal(err)
 	}
-	cr.Spec.DeletionPolicy = "Retain"
+	cr.Spec.DeletionPolicy = tadossv1.DeletionPolicyRetain
+	cr.Spec.DeletionProtection = ptr.To(false)
 	if _, err := r.finalize(ctx, cr); err != nil {
 		t.Fatal(err)
 	}
@@ -114,5 +118,28 @@ func TestOwnershipTokenPersistenceAndRetention(t *testing.T) {
 	}
 	if len(retained.OwnerReferences) != 0 {
 		t.Fatal("retained database would be garbage collected")
+	}
+}
+
+func TestDatabaseAndIngressOverrides(t *testing.T) {
+	cr := instance()
+	cluster := databaseCluster(cr)
+	if cluster.Spec.ImageName != tadossv1.DefaultPostgresImage || cluster.Spec.Resources.Limits.Memory().String() != "1Gi" {
+		t.Fatal("managed database defaults not applied")
+	}
+	cr.Spec.Database.Image = "registry.example.com/postgresql:18"
+	cr.Spec.Database.Resources = corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("2Gi")}}
+	cluster = databaseCluster(cr)
+	if cluster.Spec.ImageName != cr.Spec.Database.Image || cluster.Spec.Resources.Requests.Memory().String() != "2Gi" || cluster.Spec.Resources.Limits.Memory().String() != "1Gi" {
+		t.Fatal("managed database overrides ignored")
+	}
+	cr.Spec.Ingress = tadossv1.IngressSpec{Host: "api.example.com", ClassName: "traefik", TLSSecretName: "tls", ClusterIssuer: "issuer", Annotations: map[string]string{"cert-manager.io/cluster-issuer": "other", "example.com/redirect": "true"}}
+	ingress := workloads(cr, "db", "token", "checksum")[2].(*networkingv1.Ingress)
+	if ingress.Annotations["cert-manager.io/cluster-issuer"] != "issuer" || ingress.Annotations["example.com/redirect"] != "true" {
+		t.Fatal("ingress annotations must merge with the issuer annotation winning")
+	}
+	var typed tadossv1.Tadoss
+	if err := json.Unmarshal([]byte(`{"spec":{}}`), &typed); err != nil || typed.Spec.DeletionProtection != nil {
+		t.Fatal("an absent deletionProtection must stay unset so the CRD default applies")
 	}
 }

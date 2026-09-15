@@ -42,10 +42,19 @@ spec:
 ```
 
 Create the namespace first. Omit `ingress` for Service-only access. Optional
-`replicas`, `database.instances`, `database.storageClass` and `resources` override
-profile defaults. Managed databases use CloudNativePG and PostgreSQL 18.4.
-Changing `database.provider` on an existing instance is rejected. The instance
-name is limited to 40 characters so child resource names remain valid.
+`replicas`, `database.instances`, `database.storageClass`, `database.image`,
+`database.resources` and `resources` override profile defaults. Managed databases
+use CloudNativePG and PostgreSQL 18.4 unless `database.image` names another
+operand. `ingress.annotations` are added to the Ingress for class-specific
+behaviour such as redirects; the cert-manager issuer annotation always wins.
+The operator owns the Deployment's replica count, so autoscalers are reverted.
+
+The CRD rejects invalid combinations at admission: `ingress.clusterIssuer`
+requires `ingress.tlsSecretName`, `database.existingSecret` is required with
+`provider: external` and rejected with `managed`, `ingress.className` and Secret
+names must be DNS names, and `database.provider` cannot change on an existing
+instance. The instance name is limited to 40 characters so child resource names
+remain valid.
 
 ## External PostgreSQL and credentials
 

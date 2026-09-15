@@ -63,6 +63,12 @@ spec:
                     description: ExistingSecret contains a PostgreSQL URI in its uri
                       key.
                     maxLength: 253
+                    pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                    type: string
+                  image:
+                    default: ghcr.io/cloudnative-pg/postgresql:18.4-standard-trixie
+                    description: Image is the PostgreSQL operand for managed databases.
+                    minLength: 1
                     type: string
                   instances:
                     format: int32
@@ -78,6 +84,66 @@ spec:
                     x-kubernetes-validations:
                     - message: database provider is immutable
                       rule: self == oldSelf
+                  resources:
+                    description: Resources of each managed PostgreSQL instance; defaults
+                      apply when unset.
+                    properties:
+                      claims:
+                        description: |-
+                          Claims lists the names of resources, defined in spec.resourceClaims,
+                          that are used by this container.
+
+                          This field depends on the
+                          DynamicResourceAllocation feature gate.
+
+                          This field is immutable. It can only be set for containers.
+                        items:
+                          description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                          properties:
+                            name:
+                              description: |-
+                                Name must match the name of one entry in pod.spec.resourceClaims of
+                                the Pod where this field is used. It makes that resource available
+                                inside a container.
+                              type: string
+                            request:
+                              description: |-
+                                Request is the name chosen for a request in the referenced claim.
+                                If empty, everything from the claim is made available, otherwise
+                                only the result of this request.
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                      limits:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Limits describes the maximum amount of compute resources allowed.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                      requests:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Requests describes the minimum amount of compute resources required.
+                          If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                          otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                    type: object
                   storage:
                     default: 5Gi
                     pattern: ^[1-9][0-9]*(Gi|Ti)$
@@ -85,6 +151,13 @@ spec:
                   storageClass:
                     type: string
                 type: object
+                x-kubernetes-validations:
+                - message: external PostgreSQL requires database.existingSecret
+                  rule: '!has(self.provider) || self.provider != ''external'' || (has(self.existingSecret)
+                    && size(self.existingSecret) > 0)'
+                - message: database.existingSecret applies only to provider external
+                  rule: '!has(self.provider) || self.provider != ''managed'' || !has(self.existingSecret)
+                    || size(self.existingSecret) == 0'
               deletionPolicy:
                 default: Retain
                 enum:
@@ -113,20 +186,39 @@ spec:
                 type: string
               ingress:
                 properties:
+                  annotations:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      Annotations are added to the Ingress, for class-specific behaviour such as
+                      redirects. The cert-manager issuer annotation always wins.
+                    maxProperties: 32
+                    type: object
                   className:
                     default: traefik
+                    maxLength: 253
+                    minLength: 1
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                     type: string
                   clusterIssuer:
                     description: ClusterIssuer enables certificate creation through
                       cert-manager's ingress shim.
+                    maxLength: 253
+                    pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                     type: string
                   host:
                     maxLength: 253
                     pattern: ^$|^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]*[a-z0-9])?$
                     type: string
                   tlsSecretName:
+                    maxLength: 253
+                    pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                     type: string
                 type: object
+                x-kubernetes-validations:
+                - message: ingress.clusterIssuer requires ingress.tlsSecretName
+                  rule: '!has(self.clusterIssuer) || size(self.clusterIssuer) == 0
+                    || (has(self.tlsSecretName) && size(self.tlsSecretName) > 0)'
               profile:
                 default: local-kind
                 enum:
@@ -136,6 +228,9 @@ spec:
                 - multi-server
                 type: string
               replicas:
+                description: |-
+                  Replicas of the API Deployment. The operator owns the Deployment's replica
+                  count, so external autoscalers are reverted on every reconcile.
                 format: int32
                 maximum: 20
                 minimum: 1
@@ -202,13 +297,10 @@ spec:
               tokenSecret:
                 description: TokenSecret names an existing Secret with a token key;
                   empty generates one.
+                maxLength: 253
+                pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                 type: string
             type: object
-            x-kubernetes-validations:
-            - message: external PostgreSQL requires database.existingSecret
-              rule: '!has(self.database) || !has(self.database.provider) || self.database.provider
-                != ''external'' || (has(self.database.existingSecret) && size(self.database.existingSecret)
-                > 0)'
           status:
             properties:
               conditions:
@@ -278,6 +370,10 @@ spec:
                 format: int64
                 type: integer
               phase:
+                enum:
+                - Progressing
+                - Ready
+                - Error
                 type: string
               readyReplicas:
                 format: int32

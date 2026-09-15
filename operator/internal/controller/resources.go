@@ -3,6 +3,7 @@ package controller
 import (
 	"crypto/sha256"
 	"fmt"
+	"maps"
 
 	cnpgv1 "github.com/cloudnative-pg/cloudnative-pg/api/v1"
 	tadossv1 "github.com/livewyer-ops/tadoss/operator/api/v1alpha1"
@@ -24,7 +25,7 @@ func replicas(t *tadossv1.Tadoss) int32 {
 	if t.Spec.Replicas != nil {
 		return *t.Spec.Replicas
 	}
-	if t.Spec.Profile == "multi-server" {
+	if t.Spec.Profile == tadossv1.ProfileMultiServer {
 		return 2
 	}
 	return 1
@@ -34,7 +35,7 @@ func databaseInstances(t *tadossv1.Tadoss) int {
 	if t.Spec.Database.Instances != nil {
 		return int(*t.Spec.Database.Instances)
 	}
-	if t.Spec.Profile == "multi-server" {
+	if t.Spec.Profile == tadossv1.ProfileMultiServer {
 		return 3
 	}
 	return 1
@@ -53,16 +54,33 @@ func metadata(t *tadossv1.Tadoss, suffix string) metav1.ObjectMeta {
 	return metav1.ObjectMeta{Name: t.Name + suffix, Namespace: t.Namespace, Labels: labels(t)}
 }
 
+func withDefaults(requirements corev1.ResourceRequirements, requests, limits corev1.ResourceList) corev1.ResourceRequirements {
+	resources := requirements.DeepCopy()
+	if len(resources.Requests) == 0 {
+		resources.Requests = requests
+	}
+	if len(resources.Limits) == 0 {
+		resources.Limits = limits
+	}
+	return *resources
+}
+
 func databaseCluster(t *tadossv1.Tadoss) *cnpgv1.Cluster {
+	image := t.Spec.Database.Image
+	if image == "" {
+		image = tadossv1.DefaultPostgresImage
+	}
 	return &cnpgv1.Cluster{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "postgresql.cnpg.io/v1", Kind: "Cluster"},
 		ObjectMeta: metadata(t, "-db"),
 		Spec: cnpgv1.ClusterSpec{
-			Instances:             databaseInstances(t),
-			ImageName:             "ghcr.io/cloudnative-pg/postgresql:18.4-standard-trixie",
-			StorageConfiguration:  cnpgv1.StorageConfiguration{Size: t.Spec.Database.Storage, StorageClass: t.Spec.Database.StorageClass},
-			Bootstrap:             &cnpgv1.BootstrapConfiguration{InitDB: &cnpgv1.BootstrapInitDB{Database: "tadoss", Owner: "tadoss"}},
-			Resources:             corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("128Mi")}},
+			Instances:            databaseInstances(t),
+			ImageName:            image,
+			StorageConfiguration: cnpgv1.StorageConfiguration{Size: t.Spec.Database.Storage, StorageClass: t.Spec.Database.StorageClass},
+			Bootstrap:            &cnpgv1.BootstrapConfiguration{InitDB: &cnpgv1.BootstrapInitDB{Database: "tadoss", Owner: "tadoss"}},
+			Resources: withDefaults(t.Spec.Database.Resources,
+				corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("128Mi")},
+				corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("1Gi")}),
 			EnableSuperuserAccess: ptr.To(false),
 		},
 	}
@@ -75,17 +93,13 @@ func secretEnv(name, secret, key string) corev1.EnvVar {
 func pod(t *tadossv1.Tadoss, databaseSecret, tokenSecret string) corev1.PodTemplateSpec {
 	podLabels := labels(t)
 	podLabels["app.kubernetes.io/component"] = "api"
-	resources := t.Spec.Resources.DeepCopy()
-	if len(resources.Requests) == 0 {
-		memory := "128Mi"
-		if t.Spec.Profile == "edge" {
-			memory = "64Mi"
-		}
-		resources.Requests = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse(memory)}
+	memory := "128Mi"
+	if t.Spec.Profile == tadossv1.ProfileEdge {
+		memory = "64Mi"
 	}
-	if len(resources.Limits) == 0 {
-		resources.Limits = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")}
-	}
+	resources := withDefaults(t.Spec.Resources,
+		corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse(memory)},
+		corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")})
 	return corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{Labels: podLabels},
 		Spec: corev1.PodSpec{
@@ -95,7 +109,7 @@ func pod(t *tadossv1.Tadoss, databaseSecret, tokenSecret string) corev1.PodTempl
 				Name: "api", Image: t.Spec.Image, ImagePullPolicy: t.Spec.ImagePullPolicy,
 				Env:             []corev1.EnvVar{secretEnv("TADOSS_DATABASE", databaseSecret, "uri"), secretEnv("TADOSS_TOKEN", tokenSecret, "token"), {Name: "TADOSS_AUTO_MIGRATE", Value: "false"}},
 				Ports:           []corev1.ContainerPort{{Name: "http", ContainerPort: 8000}},
-				Resources:       *resources,
+				Resources:       resources,
 				SecurityContext: &corev1.SecurityContext{AllowPrivilegeEscalation: ptr.To(false), ReadOnlyRootFilesystem: ptr.To(true), Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}},
 				StartupProbe:    probe("/readyz", 30, 2), ReadinessProbe: probe("/readyz", 3, 5), LivenessProbe: probe("/healthz", 3, 10),
 				VolumeMounts: []corev1.VolumeMount{{Name: "tmp", MountPath: "/tmp"}},
@@ -148,8 +162,12 @@ func workloads(t *tadossv1.Tadoss, databaseSecret, tokenSecret, checksum string)
 		if t.Spec.Ingress.TLSSecretName != "" {
 			ingress.Spec.TLS = []networkingv1.IngressTLS{{Hosts: []string{t.Spec.Ingress.Host}, SecretName: t.Spec.Ingress.TLSSecretName}}
 		}
+		ingress.Annotations = maps.Clone(t.Spec.Ingress.Annotations)
 		if t.Spec.Ingress.ClusterIssuer != "" {
-			ingress.Annotations = map[string]string{"cert-manager.io/cluster-issuer": t.Spec.Ingress.ClusterIssuer}
+			if ingress.Annotations == nil {
+				ingress.Annotations = map[string]string{}
+			}
+			ingress.Annotations["cert-manager.io/cluster-issuer"] = t.Spec.Ingress.ClusterIssuer
 		}
 		objects = append(objects, ingress)
 	}
