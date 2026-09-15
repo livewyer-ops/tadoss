@@ -7,7 +7,11 @@ image:
 crds:
   install: true
 replicas: 1
+# Namespaces to reconcile. Empty watches the whole cluster with a ClusterRole; a list
+# scopes both the cache and the RBAC to Roles in those namespaces.
 watchNamespaces: []
+rbac:
+  create: true
 resources:
   requests:
     cpu: 100m

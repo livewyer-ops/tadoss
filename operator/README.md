@@ -73,7 +73,9 @@ database URI changes also trigger a new schema Job. Existing Secrets and
 external databases are never adopted or deleted by the operator. The controller
 reads credential Secrets directly from the API server and keeps only Secret
 metadata in its cache; Secret contents are never cached. On shared clusters set
-the chart value `watchNamespaces` so the cache covers only those namespaces.
+the chart value `watchNamespaces` so the cache and the operator's RBAC cover
+only those namespaces: the chart then renders a Role per namespace instead of a
+ClusterRole, keeping only namespace reads cluster-wide.
 
 ## Reconciliation and deletion
 

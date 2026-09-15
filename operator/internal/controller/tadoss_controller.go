@@ -40,19 +40,22 @@ type TadossReconciler struct {
 	Recorder events.EventRecorder
 }
 
-// +kubebuilder:rbac:groups=tadoss.livewyer.io,resources=tadosses,verbs=get;list;watch;update;patch
-// +kubebuilder:rbac:groups=tadoss.livewyer.io,resources=tadosses/status,verbs=get;update;patch
+// Owned resources are removed by garbage collection, so delete is granted only where the
+// controller deletes directly: superseded Jobs, pruned Ingresses and budgets, and the
+// one-off Deployment recreation. Leader-election leases are granted by the chart in the
+// release namespace.
+// +kubebuilder:rbac:groups=tadoss.livewyer.io,resources=tadosses,verbs=get;list;watch;patch
+// +kubebuilder:rbac:groups=tadoss.livewyer.io,resources=tadosses/status,verbs=get;patch
 // +kubebuilder:rbac:groups=tadoss.livewyer.io,resources=tadosses/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups="",resources=secrets;services,verbs=get;list;watch;create;patch;delete
+// +kubebuilder:rbac:groups="",resources=secrets;services,verbs=get;list;watch;create;patch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=postgresql.cnpg.io,resources=clusters,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups=postgresql.cnpg.io,resources=clusters,verbs=get;list;watch;create;patch
 
 func (r *TadossReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	t := &tadossv1.Tadoss{}

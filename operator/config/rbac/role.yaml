@@ -19,7 +19,6 @@ rules:
   - services
   verbs:
   - create
-  - delete
   - get
   - list
   - patch
@@ -55,17 +54,6 @@ rules:
   - patch
   - watch
 - apiGroups:
-  - coordination.k8s.io
-  resources:
-  - leases
-  verbs:
-  - create
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
   - networking.k8s.io
   resources:
   - ingresses
@@ -93,7 +81,6 @@ rules:
   - clusters
   verbs:
   - create
-  - delete
   - get
   - list
   - patch
@@ -106,7 +93,6 @@ rules:
   - get
   - list
   - patch
-  - update
   - watch
 - apiGroups:
   - tadoss.livewyer.io
@@ -121,4 +107,3 @@ rules:
   verbs:
   - get
   - patch
-  - update

@@ -1,0 +1,93 @@
+{{- if .Values.rbac.create }}
+{{- $rules := (.Files.Get "files/role.yaml" | fromYaml).rules }}
+{{- $namespaced := list }}
+{{- range $rules }}{{ if not (has "namespaces" .resources) }}{{ $namespaced = append $namespaced . }}{{ end }}{{ end }}
+{{- if .Values.watchNamespaces }}
+{{- range .Values.watchNamespaces }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "tadoss-operator.fullname" $ }}
+  namespace: {{ . }}
+  labels: {{- include "tadoss-operator.labels" $ | nindent 4 }}
+rules: {{- toYaml $namespaced | nindent 2 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "tadoss-operator.fullname" $ }}
+  namespace: {{ . }}
+  labels: {{- include "tadoss-operator.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "tadoss-operator.fullname" $ }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $.Release.Name }}
+    namespace: {{ $.Release.Namespace }}
+---
+{{- end }}
+# Namespace termination is observed cluster-wide even when reconciliation is scoped.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "tadoss-operator.fullname" . }}
+  labels: {{- include "tadoss-operator.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, list, watch]
+{{- else }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "tadoss-operator.fullname" . }}
+  labels: {{- include "tadoss-operator.labels" . | nindent 4 }}
+rules: {{- toYaml $rules | nindent 2 }}
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "tadoss-operator.fullname" . }}
+  labels: {{- include "tadoss-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "tadoss-operator.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}
+    namespace: {{ .Release.Namespace }}
+---
+# Leader election needs a lease and events in the release namespace only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-leader-election
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "tadoss-operator.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch]
+  - apiGroups: ["", events.k8s.io]
+    resources: [events]
+    verbs: [create, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-leader-election
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "tadoss-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-leader-election
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

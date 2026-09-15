@@ -7,6 +7,7 @@ exclude:
   - operator/config/**
   - operator/test/chainsaw/**
   - deploy/charts/*/templates/**
+  - deploy/charts/*/files/**
 formatter:
   type: basic
   retain_line_breaks_single: true
