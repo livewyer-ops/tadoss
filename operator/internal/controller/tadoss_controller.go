@@ -142,6 +142,11 @@ func (r *TadossReconciler) reconcile(ctx context.Context, t *tadossv1.Tadoss) (c
 		return r.pending(ctx, t, "SchemaPending", "Waiting for the schema Job")
 	}
 	objects := workloads(t, database.Name, token.Name, checksum)
+	if waiting, err := r.migrateDeployment(ctx, t, objects[0].(*appsv1.Deployment)); err != nil {
+		return ctrl.Result{}, err
+	} else if waiting {
+		return r.pending(ctx, t, "SelectorMigration", "Recreating the API Deployment with a UID-free selector")
+	}
 	for _, object := range objects {
 		if err := r.apply(ctx, t, object); err != nil {
 			return ctrl.Result{}, err
@@ -193,6 +198,34 @@ func (r *TadossReconciler) token(ctx context.Context, t *tadossv1.Tadoss) (*core
 		return nil, err
 	}
 	return secret, r.Create(ctx, secret)
+}
+
+// migrateDeployment replaces a Deployment whose immutable selector still carries the
+// instance UID. Orphaning the ReplicaSet keeps the pods running; the recreated
+// Deployment adopts it because the pod template is unchanged.
+func (r *TadossReconciler) migrateDeployment(ctx context.Context, t *tadossv1.Tadoss, desired *appsv1.Deployment) (bool, error) {
+	live := &appsv1.Deployment{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(desired), live); err != nil {
+		return false, client.IgnoreNotFound(err)
+	}
+	if !metav1.IsControlledBy(live, t) {
+		return false, nil
+	}
+	if !live.DeletionTimestamp.IsZero() {
+		return true, nil
+	}
+	if live.Spec.Selector == nil {
+		return false, nil
+	}
+	if _, legacy := live.Spec.Selector.MatchLabels[instanceUID]; !legacy {
+		return false, nil
+	}
+	logf.FromContext(ctx).Info("recreating the API Deployment with a UID-free selector", "deployment", live.Name)
+	if r.Recorder != nil {
+		r.Recorder.Eventf(t, nil, corev1.EventTypeNormal, "SelectorMigration", "Reconcile", "Recreating Deployment %s with a UID-free selector; pods keep running", live.Name)
+	}
+	uid := live.UID
+	return true, r.Delete(ctx, live, client.PropagationPolicy(metav1.DeletePropagationOrphan), client.Preconditions{UID: &uid})
 }
 
 func (r *TadossReconciler) apply(ctx context.Context, t *tadossv1.Tadoss, desired client.Object) error {

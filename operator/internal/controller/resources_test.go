@@ -51,6 +51,15 @@ func TestProfilesAndCredentialRollouts(t *testing.T) {
 		})
 	}
 	cr := instance()
+	deployment := workloads(cr, "db", "token", "checksum")[0].(*appsv1.Deployment)
+	if _, ok := deployment.Spec.Selector.MatchLabels[instanceUID]; ok {
+		t.Fatal("the Deployment selector must not depend on the instance UID")
+	}
+	for key, value := range deployment.Spec.Selector.MatchLabels {
+		if deployment.Spec.Template.Labels[key] != value {
+			t.Fatal("the pod template must match the Deployment selector")
+		}
+	}
 	first := schemaJob(cr, "db", "token", "database-v1")
 	service := workloads(cr, "db", "token", "checksum")[1].(*corev1.Service)
 	matches := true

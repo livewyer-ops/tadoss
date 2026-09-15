@@ -78,7 +78,11 @@ the chart value `watchNamespaces` so the cache covers only those namespaces.
 ## Reconciliation and deletion
 
 The controller applies owned resources with server-side apply and corrects
-drift. It refuses to overwrite resources owned by another instance. The schema
+drift. It refuses to overwrite resources owned by another instance. Workload
+selectors use the instance name rather than its UID, so an instance recreated
+with the same name adopts the API Deployment that survived it; an operator
+upgrade recreates a Deployment that still carries the old selector once, keeping
+its pods running. The schema
 Job must complete before API changes are applied. A failed migration sets
 `Ready=False` with reason `SchemaFailed`; fix the underlying cause and delete
 the failed Job to retry. Changing images creates a new Job and prunes old Jobs

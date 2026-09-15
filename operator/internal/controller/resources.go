@@ -41,6 +41,17 @@ func databaseInstances(t *tadossv1.Tadoss) int {
 	return 1
 }
 
+// selectorLabels identify API pods without the instance UID, so a recreated
+// instance keeps matching the workloads that survived it.
+func selectorLabels(t *tadossv1.Tadoss) map[string]string {
+	return map[string]string{
+		"app.kubernetes.io/name":       "tadoss",
+		"app.kubernetes.io/instance":   t.Name,
+		"app.kubernetes.io/managed-by": "tadoss-operator",
+		"app.kubernetes.io/component":  "api",
+	}
+}
+
 func labels(t *tadossv1.Tadoss) map[string]string {
 	return map[string]string{
 		"app.kubernetes.io/name":       "tadoss",
@@ -143,13 +154,13 @@ func schemaJob(t *tadossv1.Tadoss, databaseSecret, tokenSecret, checksum string)
 func workloads(t *tadossv1.Tadoss, databaseSecret, tokenSecret, checksum string) []client.Object {
 	template := pod(t, databaseSecret, tokenSecret)
 	template.Annotations = map[string]string{"checksum/credentials": checksum}
-	selector := &metav1.LabelSelector{MatchLabels: template.Labels}
+	selector := &metav1.LabelSelector{MatchLabels: selectorLabels(t)}
 	if replicas(t) > 1 {
 		template.Spec.TopologySpreadConstraints = []corev1.TopologySpreadConstraint{{MaxSkew: 1, TopologyKey: "kubernetes.io/hostname", WhenUnsatisfiable: corev1.ScheduleAnyway, LabelSelector: selector}}
 	}
 	objects := []client.Object{
-		&appsv1.Deployment{TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"}, ObjectMeta: metadata(t, "-api"), Spec: appsv1.DeploymentSpec{Replicas: ptr.To(replicas(t)), Selector: &metav1.LabelSelector{MatchLabels: labels(t)}, Template: template}},
-		&corev1.Service{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Service"}, ObjectMeta: metadata(t, "-api"), Spec: corev1.ServiceSpec{Selector: template.Labels, Ports: []corev1.ServicePort{{Name: "http", Port: 8000, TargetPort: intstr.FromString("http")}}}},
+		&appsv1.Deployment{TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"}, ObjectMeta: metadata(t, "-api"), Spec: appsv1.DeploymentSpec{Replicas: ptr.To(replicas(t)), Selector: selector, Template: template}},
+		&corev1.Service{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Service"}, ObjectMeta: metadata(t, "-api"), Spec: corev1.ServiceSpec{Selector: selectorLabels(t), Ports: []corev1.ServicePort{{Name: "http", Port: 8000, TargetPort: intstr.FromString("http")}}}},
 	}
 	if replicas(t) > 1 {
 		objects = append(objects, &policyv1.PodDisruptionBudget{TypeMeta: metav1.TypeMeta{APIVersion: "policy/v1", Kind: "PodDisruptionBudget"}, ObjectMeta: metadata(t, "-api"), Spec: policyv1.PodDisruptionBudgetSpec{MinAvailable: ptr.To(intstr.FromInt32(1)), Selector: selector}})
