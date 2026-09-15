@@ -1,3 +1,4 @@
+// The tadoss-operator manager reconciles Tadoss instances.
 package main
 
 import (

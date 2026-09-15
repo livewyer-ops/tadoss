@@ -163,9 +163,10 @@ cluster.
 
 ## Tests
 
-`task operator:test` checks profile defaults, workload security, migration
-identity, credential ownership, retention logic and finalizer release on
-namespace termination. `task operator:e2e:chainsaw`
+`task operator:test` runs the unit tests and, against a kube-apiserver from
+`setup-envtest`, reconcile tests for a managed instance, the CRD admission
+rules, blocked deletion and finalizer release on namespace termination.
+`task operator:lint` runs `go vet` and golangci-lint. `task operator:e2e:chainsaw`
 uses actual Kubernetes resources, PostgreSQL and API Jobs. It reads the image
 from the deployed instance, so Kind tests require no published release image.
 Failed tests can leave protected resources behind; their temporary namespaces

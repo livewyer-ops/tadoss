@@ -70,6 +70,7 @@ tasks:
       - uv run ruff format --check .
       - uv run python -m unittest discover -s tests -v
       - task: operator:test
+      - task: operator:lint
       - task: charts:lint
       - task: manifests:check
       - yamlfmt -lint
@@ -81,6 +82,7 @@ tasks:
       - uv run ruff check --fix .
       - uv run ruff format .
       - gofmt -l -w operator
+      - cd operator && golangci-lint run --fix ./...
       - yamlfmt
 
   charts:lint:
@@ -135,9 +137,14 @@ tasks:
     cmds: [make generate]
 
   operator:test:
-    desc: Test the operator's resource and lifecycle logic
+    desc: Unit and envtest reconcile tests for the operator
     dir: operator
-    cmds: [go vet ./..., make test]
+    cmds: [make test]
+
+  operator:lint:
+    desc: Vet and lint the operator
+    dir: operator
+    cmds: [make vet, make lint]
 
   images:build:
     desc: Build the API and operator images tagged with the source content hash

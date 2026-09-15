@@ -1,8 +1,12 @@
-.PHONY: generate test build
+.PHONY: generate test lint vet build envtest
 
 CONTROLLER_GEN ?= controller-gen
 KUSTOMIZE ?= kustomize
 CHART := ../deploy/charts/tadoss-operator
+LOCALBIN := $(CURDIR)/bin
+ENVTEST_K8S_VERSION ?= 1.36
+ENVTEST_VERSION ?= v0.24.1
+ENVTEST := $(LOCALBIN)/setup-envtest
 
 generate:
 	$(CONTROLLER_GEN) object paths=./api/...
@@ -10,8 +14,21 @@ generate:
 	{ printf '{{- if .Values.crds.install }}\n'; $(KUSTOMIZE) build config/crd; printf '{{- end }}\n'; } > $(CHART)/templates/crd.yaml
 	cp config/rbac/role.yaml $(CHART)/files/role.yaml
 
-test:
-	go test -race ./...
+$(ENVTEST):
+	GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@$(ENVTEST_VERSION)
+
+envtest: $(ENVTEST)
+	$(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path > /dev/null
+
+# Runs the unit tests and, with a kube-apiserver from setup-envtest, the reconcile tests.
+test: envtest
+	KUBEBUILDER_ASSETS="$$($(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test -race -count=1 ./...
+
+vet:
+	go vet ./...
+
+lint:
+	golangci-lint run ./...
 
 build:
 	CGO_ENABLED=0 go build -trimpath -o bin/manager ./cmd

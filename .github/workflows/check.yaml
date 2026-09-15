@@ -26,7 +26,8 @@ jobs:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: go-${{ runner.os }}-${{ hashFiles('operator/go.sum') }}
+            operator/bin
+          key: go-${{ runner.os }}-${{ hashFiles('operator/go.sum', 'operator/Makefile') }}
       - run: task setup
       - run: task check
       - name: Generated files are current

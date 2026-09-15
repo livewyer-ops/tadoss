@@ -33,6 +33,8 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
+        description: 'Tadoss is a TADOSS instance: database, schema migration, API
+          and ingress.'
         properties:
           apiVersion:
             description: |-
@@ -53,11 +55,14 @@ spec:
             type: object
           spec:
             default: {}
+            description: TadossSpec describes the desired instance.
             properties:
               database:
                 default:
                   provider: managed
                   storage: 5Gi
+                description: DatabaseSpec selects a managed CloudNativePG cluster
+                  or an existing PostgreSQL database.
                 properties:
                   existingSecret:
                     description: ExistingSecret contains a PostgreSQL URI in its uri
@@ -185,6 +190,8 @@ spec:
                 - Never
                 type: string
               ingress:
+                description: IngressSpec exposes the API through an Ingress; an empty
+                  host disables it.
                 properties:
                   annotations:
                     additionalProperties:
@@ -302,6 +309,8 @@ spec:
                 type: string
             type: object
           status:
+            description: TadossStatus reports the observed instance; it never contains
+              credential values.
             properties:
               conditions:
                 items:

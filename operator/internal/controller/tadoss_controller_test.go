@@ -46,7 +46,7 @@ func TestFinalizeReleasesWhenNamespaceTerminates(t *testing.T) {
 			cr.Finalizers = []string{finalizer}
 			cr.Spec.DeletionProtection = ptr.To(true)
 			r := &TadossReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(cr).WithObjects(cr, tc.namespace).Build(), Scheme: scheme}
-			result, err := r.finalize(ctx, cr)
+			result, err := r.handleDeletion(ctx, cr)
 			if err != nil {
 				t.Fatal(err)
 			}

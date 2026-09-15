@@ -128,7 +128,7 @@ func TestOwnershipTokenPersistenceAndRetention(t *testing.T) {
 	}
 	cr.Spec.DeletionPolicy = tadossv1.DeletionPolicyRetain
 	cr.Spec.DeletionProtection = ptr.To(false)
-	if _, err := r.finalize(ctx, cr); err != nil {
+	if _, err := r.handleDeletion(ctx, cr); err != nil {
 		t.Fatal(err)
 	}
 	retained := &cnpgv1.Cluster{}

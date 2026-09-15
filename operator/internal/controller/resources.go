@@ -1,3 +1,4 @@
+// Package controller reconciles Tadoss instances into their Kubernetes resources.
 package controller
 
 import (

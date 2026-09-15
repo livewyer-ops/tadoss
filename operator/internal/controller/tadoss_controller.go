@@ -37,6 +37,7 @@ const (
 	fieldOwner = "tadoss-operator"
 )
 
+// TadossReconciler reconciles one Tadoss instance per request.
 type TadossReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
@@ -60,13 +61,14 @@ type TadossReconciler struct {
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=postgresql.cnpg.io,resources=clusters,verbs=get;list;watch;create;patch
 
+// Reconcile drives an instance towards its spec and records the outcome in its status.
 func (r *TadossReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	t := &tadossv1.Tadoss{}
 	if err := r.Get(ctx, req.NamespacedName, t); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !t.DeletionTimestamp.IsZero() {
-		return r.finalize(ctx, t)
+		return r.handleDeletion(ctx, t)
 	}
 	if !controllerutil.ContainsFinalizer(t, finalizer) {
 		before := t.DeepCopy()
@@ -273,7 +275,9 @@ func (r *TadossReconciler) apply(ctx context.Context, t *tadossv1.Tadoss, desire
 	if err := controllerutil.SetControllerReference(t, desired, r.Scheme); err != nil {
 		return err
 	}
-	return r.Patch(ctx, desired, client.Apply, client.FieldOwner(fieldOwner), client.ForceOwnership)
+	// The typed apply patch remains supported; apply configurations need an
+	// unstructured round trip that would lose the status returned into desired.
+	return r.Patch(ctx, desired, client.Apply, client.FieldOwner(fieldOwner), client.ForceOwnership) //nolint:staticcheck
 }
 
 func (r *TadossReconciler) prune(ctx context.Context, t *tadossv1.Tadoss, currentJob string) error {
@@ -324,7 +328,7 @@ func (r *TadossReconciler) owned(ctx context.Context, t *tadossv1.Tadoss, key cl
 	return empty, nil
 }
 
-func (r *TadossReconciler) finalize(ctx context.Context, t *tadossv1.Tadoss) (ctrl.Result, error) {
+func (r *TadossReconciler) handleDeletion(ctx context.Context, t *tadossv1.Tadoss) (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(t, finalizer) {
 		return ctrl.Result{}, nil
 	}
@@ -332,14 +336,15 @@ func (r *TadossReconciler) finalize(ctx context.Context, t *tadossv1.Tadoss) (ct
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if terminating {
+	switch {
+	case terminating:
 		logf.FromContext(ctx).Info("namespace is terminating; releasing the finalizer regardless of deletionProtection and deletionPolicy")
-	} else if ptr.Deref(t.Spec.DeletionProtection, true) {
+	case ptr.Deref(t.Spec.DeletionProtection, true):
 		if err := r.status(ctx, t, tadossv1.PhaseProgressing, "DeletionBlocked", "Set spec.deletionProtection=false to permit deletion", false); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{RequeueAfter: time.Minute}, nil
-	} else if t.Spec.Database.Provider == tadossv1.ProviderManaged && t.Spec.DeletionPolicy == tadossv1.DeletionPolicyRetain {
+	case t.Spec.Database.Provider == tadossv1.ProviderManaged && t.Spec.DeletionPolicy == tadossv1.DeletionPolicyRetain:
 		cluster := &cnpgv1.Cluster{}
 		err := r.Get(ctx, client.ObjectKey{Namespace: t.Namespace, Name: t.Name + suffixDB}, cluster)
 		if err != nil && !apierrors.IsNotFound(err) {
@@ -420,6 +425,7 @@ func (r *TadossReconciler) status(ctx context.Context, t *tadossv1.Tadoss, phase
 	return nil
 }
 
+// SetupWithManager registers the controller, its owned resources and its watches.
 func (r *TadossReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	terminating := builder.WithPredicates(predicate.NewPredicateFuncs(func(o client.Object) bool { return !o.GetDeletionTimestamp().IsZero() }))
 	b := ctrl.NewControllerManagedBy(mgr).For(&tadossv1.Tadoss{}).

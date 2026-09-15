@@ -5,6 +5,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// Values of the enumerated spec and status fields.
 const (
 	ProviderManaged  = "managed"
 	ProviderExternal = "external"
@@ -27,6 +28,7 @@ const (
 	DefaultPostgresImage = "ghcr.io/cloudnative-pg/postgresql:18.4-standard-trixie"
 )
 
+// DatabaseSpec selects a managed CloudNativePG cluster or an existing PostgreSQL database.
 // +kubebuilder:validation:XValidation:rule="!has(self.provider) || self.provider != 'external' || (has(self.existingSecret) && size(self.existingSecret) > 0)",message="external PostgreSQL requires database.existingSecret"
 // +kubebuilder:validation:XValidation:rule="!has(self.provider) || self.provider != 'managed' || !has(self.existingSecret) || size(self.existingSecret) == 0",message="database.existingSecret applies only to provider external"
 type DatabaseSpec struct {
@@ -57,6 +59,7 @@ type DatabaseSpec struct {
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
+// IngressSpec exposes the API through an Ingress; an empty host disables it.
 // +kubebuilder:validation:XValidation:rule="!has(self.clusterIssuer) || size(self.clusterIssuer) == 0 || (has(self.tlsSecretName) && size(self.tlsSecretName) > 0)",message="ingress.clusterIssuer requires ingress.tlsSecretName"
 type IngressSpec struct {
 	// +kubebuilder:validation:MaxLength=253
@@ -84,6 +87,7 @@ type IngressSpec struct {
 	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
+// TadossSpec describes the desired instance.
 type TadossSpec struct {
 	// +kubebuilder:validation:Enum=local-kind;edge;single-server;multi-server
 	// +kubebuilder:default=local-kind
@@ -121,6 +125,7 @@ type TadossSpec struct {
 	DeletionProtection *bool `json:"deletionProtection,omitempty"`
 }
 
+// TadossStatus reports the observed instance; it never contains credential values.
 type TadossStatus struct {
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
@@ -143,6 +148,7 @@ type TadossStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
+// Tadoss is a TADOSS instance: database, schema migration, API and ingress.
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 40",message="instance name must be at most 40 characters"
@@ -159,11 +165,10 @@ type Tadoss struct {
 	Status TadossStatus `json:"status,omitempty"`
 }
 
+// TadossList is a list of Tadoss instances.
 // +kubebuilder:object:root=true
 type TadossList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []Tadoss `json:"items"`
 }
-
-func init() { SchemeBuilder.Register(&Tadoss{}, &TadossList{}) }
