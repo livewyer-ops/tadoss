@@ -149,6 +149,8 @@ Times use the BBC `mediatimestamp` library with nanosecond precision. For exampl
 `[0:0_1:500000000)` includes the start and excludes 1.5 seconds. `[1:0]` is an
 instant; `_` is the entire timeline; `()` is empty. Queries match overlapping
 events. Time-filtered deletion removes only events wholly inside the range.
+Event timeranges must be non-empty: `()` and zero-length half-open ranges such
+as `[1:0_1:0)` are rejected. `()` as a query filter matches nothing.
 An `edit_rate` requires event boundaries to lie on its rational rate grid.
 
 TAMS timeline references follow
@@ -174,8 +176,11 @@ list as a query parameter; the HTTP client then encodes the parameter itself.
 
 `TADOSS_DEV` and `TADOSS_AUTO_MIGRATE` accept `1`, `true`, `yes` or `on` and `0`, `false`,
 `no` or `off`; any other value fails startup.
-`python -m tadoss migrate` initialises or checks the database schema. Kubernetes
-API rollouts wait for that Job to succeed. `/readyz` checks database connectivity
+`python -m tadoss migrate` applies pending migrations in order under a database
+lock and is safe to re-run; `/readyz` reports `schema` until the database matches the
+build. Migrations create the trusted `btree_gist` extension, so the connection role
+must own the database or be allowed to create extensions. Kubernetes API rollouts
+wait for that Job to succeed. `/readyz` checks database connectivity
 and schema compatibility; `/healthz` checks the process. Connections are pooled per
 replica and established in the background, so a slow database delays readiness rather
 than restarting the process.
@@ -188,12 +193,11 @@ public. OIDC, per-resource permissions and HTTP Basic are not implemented.
 
 Writes are limited to 1 MiB per request and 1,000 events per batch. Pages default
 to 100 items and cap at 1,000. PostgreSQL transactions permit multiple API
-replicas, each holding a pool of connections; a database advisory lock currently
-serialises all writes. Statements time out after
-30 s and return 503. Listings
-and overlap checks scan records in memory. Offset pagination can shift under
-concurrent edits. Indexed range queries and finer locks are needed for higher
-throughput. The operator does not configure database backups: configure and
+replicas, each holding a pool of connections. Writes to one track or schema are
+serialised; different resources proceed concurrently. Statements time out after
+30 s and return 503. Event timeranges are indexed, so listings, overlap checks and
+coverage are answered in SQL, and paging cursors stay stable under concurrent
+edits. The operator does not configure database backups: configure and
 verify CNPG backups or your external provider's backup policy before storing
 irreplaceable data. Retention is not a backup.
 

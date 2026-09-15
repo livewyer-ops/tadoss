@@ -51,7 +51,8 @@ name is limited to 40 characters so child resource names remain valid.
 
 Set `database.provider: external` and `database.existingSecret` to a Secret in
 the instance namespace. Its `uri` key must contain a PostgreSQL connection URI
-with permissions to create and use TADOSS tables. Use a dedicated database;
+with permissions to create and use TADOSS tables and to create the trusted
+`btree_gist` extension; owning the database is sufficient. Use a dedicated database;
 tables are created in its default schema. CloudNativePG is not required for
 external mode. Install its CRD before starting the operator if enabling managed
 mode later, then restart the controller to register that watch.

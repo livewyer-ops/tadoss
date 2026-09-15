@@ -69,7 +69,7 @@ def validate_payload(validator, payload):
         ) from exc
 
 
-def time_range(value):
+def time_range(value, require_non_empty=False):
     pattern = SPEC["components"]["schemas"]["timerange"]["pattern"]
     if not isinstance(value, str) or not re.fullmatch(pattern, value):
         raise APIError(
@@ -89,19 +89,23 @@ def time_range(value):
                 "Timestamp exceeds the BBC timestamp library's 48-bit seconds limit",
             )
     try:
-        return TimeRange.from_str(value)
+        result = TimeRange.from_str(value)
     except ValueError as exc:
         raise APIError(400, "Invalid timerange") from exc
+    if require_non_empty and result.is_empty():
+        raise APIError(400, "Event timerange must not be empty")
+    return result
 
 
 def check_grid(timerange, track):
+    bounds = [bound for bound in (timerange.start, timerange.end) if bound is not None]
+    check_grid_timestamps(bounds, track)
+
+
+def check_grid_timestamps(timestamps, track):
     if rate := track.get("edit_rate"):
-        for bound in (timerange.start, timerange.end):
-            if (
-                bound is not None
-                and bound.normalise(rate["numerator"], rate.get("denominator", 1))
-                != bound
-            ):
+        for bound in timestamps:
+            if bound.normalise(rate["numerator"], rate.get("denominator", 1)) != bound:
                 raise APIError(
                     400, "Event timerange must align with the track's edit_rate"
                 )

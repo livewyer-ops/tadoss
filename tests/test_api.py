@@ -3,6 +3,7 @@ import json
 import os
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from decimal import Decimal
 from unittest.mock import patch
 from urllib.parse import quote
 from uuid import uuid4
@@ -11,10 +12,12 @@ import psycopg
 from fastapi.testclient import TestClient
 from psycopg import connect, sql
 from psycopg.conninfo import make_conninfo
+from psycopg.types.json import Jsonb
 
+from tadoss import store
 from tadoss.api import create_app, env_flag
 from tadoss.store import DEFAULT_DATABASE
-from tadoss.validation import SPEC, contract_schema, validate
+from tadoss.validation import SPEC, contract_schema, event_key, validate
 
 SCHEMA_ID = "adb87970-b03a-4266-b5d8-f3f6541fb73a"
 TRACK_ID = "20992138-abdb-4daf-84f3-a0e07dabb5ca"
@@ -453,6 +456,199 @@ class StoreTests(unittest.TestCase):
             os.environ.pop("TADOSS_DATABASE", None)
             os.environ.pop("TADOSS_DEV", None)
             create_app(None, token="t")
+
+    def test_order_matches_library_key(self):
+        inputs = [
+            "_",
+            "_1:0]",
+            "[5:0_",
+            "[1:0]",
+            "[0:0_10:0)",
+            "[2:0_20:0)",
+            "(1:0_2:0]",
+        ]
+        self.send("POST", self.events, [event(value) for value in inputs])
+        documents = self.send("GET", self.events).json()
+        self.assertEqual(len(documents), len(inputs))
+        for reverse in (False, True):
+            expected = [
+                record["id"]
+                for record in sorted(
+                    documents, key=lambda e: event_key(e, reverse), reverse=reverse
+                )
+            ]
+            listed = self.send(
+                "GET", self.events, params={"reverse_order": str(reverse).lower()}
+            )
+            self.assertEqual([record["id"] for record in listed.json()], expected)
+            self.assertEqual(listed.headers["X-Paging-Timerange"], "_")
+
+    def test_keyset_paging_survives_concurrent_inserts(self):
+        self.send("POST", self.events, [event(f"[{n}:0_{n + 1}:0)") for n in range(5)])
+        first = self.send("GET", self.events, params={"limit": 2})
+        before_cursor = self.send(
+            "POST", self.events, event("[0:500000000_0:600000000)")
+        ).json()["responses"][0]["id"]
+        after_cursor = self.send(
+            "POST", self.events, event("[1:500000000_1:600000000)")
+        ).json()["responses"][0]["id"]
+        seen = [record["id"] for record in first.json()]
+        page = first
+        while "Link" in page.headers:
+            page = self.send("GET", page.headers["Link"].split(">", 1)[0][1:])
+            seen.extend(record["id"] for record in page.json())
+        self.assertEqual(len(seen), len(set(seen)))
+        self.assertIn(after_cursor, seen)
+        self.assertNotIn(before_cursor, seen)
+        self.assertEqual(len(seen), 6)
+        backwards = self.send(
+            "GET", self.events, params={"limit": 3, "reverse_order": "true"}
+        )
+        ids = [record["id"] for record in backwards.json()]
+        while "Link" in backwards.headers:
+            backwards = self.send("GET", backwards.headers["Link"].split(">", 1)[0][1:])
+            ids.extend(record["id"] for record in backwards.json())
+        self.assertEqual(len(ids), 7)
+        self.assertEqual(len(set(ids)), 7)
+        forward_key = first.headers["X-Paging-NextKey"]
+        self.send(
+            "GET",
+            self.events,
+            params={"page": forward_key, "reverse_order": "true"},
+            status=400,
+        )
+        self.send("GET", self.events, params={"page": "eyJ2IjoyfQ"}, status=400)
+
+    def test_empty_timeranges(self):
+        response = self.send("POST", self.events, [event("[1:0_1:0)"), event("()")])
+        self.assertEqual(
+            [r["http_status_code"] for r in response.json()["responses"]], [400, 400]
+        )
+        self.send("POST", self.events, event())
+        self.assertEqual(
+            self.send("GET", self.events, params={"timerange": "()"}).json(), []
+        )
+        self.send("DELETE", self.events, params={"timerange": "()"}, status=204)
+        self.assertEqual(len(self.send("GET", self.events).json()), 1)
+
+    def test_same_id_on_two_tracks_concurrently(self):
+        other = str(uuid4())
+        self.send("PUT", f"/tracks/{other}", {**self.track, "id": other}, status=201)
+        identifier = str(uuid4())
+
+        def post(path):
+            response = self.client.post(path, json=event(id=identifier))
+            return response.json()["responses"][0]["http_status_code"]
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            codes = sorted(pool.map(post, [self.events, f"/tracks/{other}/events"]))
+        self.assertEqual(codes, [201, 400])
+
+    def test_coverage_and_track_filters_with_unbounded_events(self):
+        self.send("POST", self.events, [event("_1:0]"), event("[5:0]")])
+        track = self.send(
+            "GET", f"/tracks/{TRACK_ID}", params={"include_timerange": "true"}
+        ).json()
+        self.assertEqual(track["timerange"], "_5:0]")
+        params = {"include_timerange": "true", "timerange": "[4:0_6:0)"}
+        self.assertEqual(
+            self.send("GET", f"/tracks/{TRACK_ID}", params=params).json()["timerange"],
+            "[5:0]",
+        )
+        self.send("POST", self.events, event("[7:0_"))
+        self.assertEqual(
+            len(
+                self.send(
+                    "GET", "/tracks", params={"timerange": "[100:0_101:0)"}
+                ).json()
+            ),
+            1,
+        )
+        self.assertEqual(
+            self.send("GET", "/tracks", params={"timerange": "[2:0_3:0)"}).json(), []
+        )
+        largest = "[281474976710655:999999998_281474976710655:999999999)"
+        self.assertTrue(
+            self.send("POST", self.events, event(largest)).json()["all_successful"]
+        )
+        self.assertEqual(
+            len(self.send("GET", self.events, params={"timerange": largest}).json()), 2
+        )
+
+    def test_migration_from_version_one(self):
+        database = os.getenv("TADOSS_TEST_DATABASE", DEFAULT_DATABASE)
+        schema = "legacy_" + uuid4().hex
+        with connect(database) as connection:
+            connection.execute(
+                sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema))
+            )
+
+        def cleanup():
+            with connect(database) as connection:
+                connection.execute(
+                    sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema))
+                )
+
+        self.addCleanup(cleanup)
+        conninfo = make_conninfo(database, options=f"-c search_path={schema}")
+        identifier = str(uuid4())
+        with connect(conninfo) as connection:
+            connection.execute(
+                "CREATE TABLE tadoss_version (version INTEGER PRIMARY KEY);"
+                "CREATE TABLE schemas (id TEXT PRIMARY KEY, document JSONB NOT NULL);"
+                "CREATE TABLE tracks (id TEXT PRIMARY KEY, schema_id TEXT NOT NULL"
+                " REFERENCES schemas(id), document JSONB NOT NULL);"
+                "CREATE TABLE events (id TEXT PRIMARY KEY, track_id TEXT NOT NULL"
+                " REFERENCES tracks(id) ON DELETE CASCADE, document JSONB NOT NULL);"
+                "CREATE INDEX events_track ON events(track_id);"
+                "INSERT INTO tadoss_version VALUES (1)"
+            )
+            connection.execute(
+                "INSERT INTO schemas VALUES (%s, %s)",
+                (SCHEMA_ID, Jsonb({"id": SCHEMA_ID, "schema": {}})),
+            )
+            connection.execute(
+                "INSERT INTO tracks VALUES (%s, %s, %s)",
+                (TRACK_ID, SCHEMA_ID, Jsonb({**self.track, "read_only": False})),
+            )
+            connection.execute(
+                "INSERT INTO events VALUES (%s, %s, %s)",
+                (
+                    identifier,
+                    TRACK_ID,
+                    Jsonb({**event("[1:0_2:0)", id=identifier), "track_id": TRACK_ID}),
+                ),
+            )
+        with patch.dict(os.environ, {"TADOSS_AUTO_MIGRATE": "false"}):
+            app = create_app(conninfo, token="t")
+        headers = {"Authorization": "Bearer t"}
+        with TestClient(app) as client:
+            self.assertEqual(client.get("/readyz").json()["reason"], "schema")
+            store.initialize(app.state.pool)
+            store.initialize(app.state.pool)
+            self.assertEqual(client.get("/readyz").status_code, 200)
+            listed = client.get(f"/tracks/{TRACK_ID}/events", headers=headers).json()
+            self.assertEqual(listed, [event("[1:0_2:0)", id=identifier)])
+        with connect(conninfo) as connection:
+            self.assertIsNone(
+                connection.execute("SELECT to_regclass('tadoss_version')").fetchone()[0]
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT sort_start, sort_start_excl, sort_end, sort_end_incl"
+                    " FROM events"
+                ).fetchone(),
+                (Decimal(10**9), False, Decimal(2 * 10**9), False),
+            )
+            self.assertEqual(
+                [
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM tadoss_migrations ORDER BY name"
+                    )
+                ],
+                ["0001_initial", "0002_event_ranges"],
+            )
 
 
 class ConfigTests(unittest.TestCase):

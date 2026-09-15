@@ -1,4 +1,5 @@
 import base64
+import binascii
 import copy
 import hmac
 import json
@@ -6,11 +7,13 @@ import logging
 import math
 import os
 from contextlib import asynccontextmanager
+from decimal import Decimal, InvalidOperation
 from urllib.parse import unquote
 
 import psycopg
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
+from psycopg import sql
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
@@ -20,7 +23,6 @@ from .validation import (
     APIError,
     contract_schema,
     coverage,
-    event_key,
     now,
     time_range,
     validate,
@@ -132,24 +134,78 @@ def filter_records(records, options):
     return result
 
 
-def filter_events(events, options, deleting=False):
-    timerange = options.get("timerange")
-    return [
-        event
-        for event in events
-        if ("ids" not in options or event["id"] in options["ids"])
-        and (
-            timerange is None
-            or (
-                timerange.contains_subrange(time_range(event["timerange"]))
-                if deleting
-                else timerange.overlaps_with_timerange(time_range(event["timerange"]))
+def next_link(request, cursor):
+    # Relative links avoid trusting a caller-supplied Host header, and the URL
+    # token is never reflected back to the client.
+    url = (
+        request.url.remove_query_params("access_token")
+        .replace(scheme="", netloc="")
+        .include_query_params(page=cursor)
+    )
+    return {"X-Paging-NextKey": cursor, "Link": f'<{url}>; rel="next"'}
+
+
+def encode_cursor(key, reverse):
+    payload = {
+        "v": 2,
+        "r": reverse,
+        "k": [str(v) if isinstance(v, Decimal) else v for v in key],
+    }
+    return base64.urlsafe_b64encode(
+        json.dumps(payload, separators=(",", ":")).encode()
+    ).decode()
+
+
+def decode_cursor(page, reverse):
+    if page is None:
+        return None
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(page))
+        if payload["v"] != 2 or payload["r"] is not reverse:
+            raise ValueError("cursor direction")
+        first, first_flag, second, second_flag, identifier = payload["k"]
+        key = (Decimal(first), first_flag, Decimal(second), second_flag, identifier)
+        if (
+            not (
+                isinstance(first_flag, bool)
+                and isinstance(second_flag, bool)
+                and isinstance(identifier, str)
+                and isinstance(first, str)
+                and isinstance(second, str)
             )
-        )
-    ]
+            or key[0].is_nan()
+            or key[2].is_nan()
+        ):
+            raise ValueError("cursor shape")
+        return key
+    except (ValueError, TypeError, KeyError, InvalidOperation, binascii.Error) as exc:
+        raise APIError(400, "Invalid page cursor") from exc
 
 
-def page_response(request, records, options, event_listing=False):
+def event_page(request, db, track_id, options):
+    limit = min(options.get("limit", 100), 1000)
+    reverse = options.get("reverse_order", False)
+    rows = store.events(
+        db,
+        track_id,
+        options,
+        limit + 1,
+        decode_cursor(options.get("page"), reverse),
+        reverse,
+    )
+    page = [document for document, _ in rows[:limit]]
+    headers = {
+        "X-Paging-Limit": str(limit),
+        "X-Paging-Count": str(len(page)),
+        "X-Paging-Reverse-Order": str(reverse).lower(),
+        "X-Paging-Timerange": coverage(page),
+    }
+    if len(rows) > limit:
+        headers.update(next_link(request, encode_cursor(rows[limit - 1][1], reverse)))
+    return JSONResponse(page, headers=headers)
+
+
+def page_response(request, records, options):
     limit = min(options.get("limit", 100), 1000)
     offset = 0
     if "page" in options:
@@ -165,19 +221,7 @@ def page_response(request, records, options, event_listing=False):
     headers = {"X-Paging-Limit": str(limit), "X-Paging-Count": str(len(page))}
     if offset + limit < len(records):
         cursor = base64.urlsafe_b64encode(str(offset + limit).encode()).decode()
-        # Relative links avoid trusting a caller-supplied Host header, and the
-        # URL token is never reflected back to the client.
-        url = (
-            request.url.remove_query_params("access_token")
-            .replace(scheme="", netloc="")
-            .include_query_params(page=cursor)
-        )
-        headers.update({"X-Paging-NextKey": cursor, "Link": f'<{url}>; rel="next"'})
-    if event_listing:
-        headers["X-Paging-Reverse-Order"] = str(
-            options.get("reverse_order", False)
-        ).lower()
-        headers["X-Paging-Timerange"] = coverage(page)
+        headers.update(next_link(request, cursor))
     return JSONResponse(page, headers=headers)
 
 
@@ -205,20 +249,15 @@ def dispatch(request, pool, body):
         raise APIError(
             404, "Deletion request not found; deletions complete synchronously"
         )
-    with store.transaction(pool, write=method in {"put", "post", "delete"}) as db:
-        collection = path.split("/")[1]
-        identifier = request.path_params.get(
-            "track_id", request.path_params.get("schema_id")
-        )
+    collection = path.split("/")[1]
+    identifier = request.path_params.get(
+        "track_id", request.path_params.get("schema_id")
+    )
+    write = method in {"put", "post", "delete"}
+    with store.transaction(pool, write=write, lock=identifier) as db:
         if identifier is None:
-            records = filter_records(store.listing(db, collection), options)
-            if "timerange" in options:
-                records = [
-                    record
-                    for record in records
-                    if filter_events(store.events(db, record["id"]), options)
-                ]
-            return page_response(request, records, options)
+            records = store.listing(db, collection, options.get("timerange"))
+            return page_response(request, filter_records(records, options), options)
         document = store.get(db, collection, identifier, required=False)
         child = path.split("/")[3:]
         if not child and method == "put":
@@ -243,25 +282,18 @@ def dispatch(request, pool, body):
         if child and child[0] == "events":
             if method == "post":
                 return JSONResponse(store.write_events(db, document, body))
-            selected = filter_events(
-                store.events(db, identifier), options, deleting=method == "delete"
-            )
             if method == "delete":
                 store.writable(document)
-                if store.delete_events(
-                    db, identifier, [event["id"] for event in selected]
-                ):
+                if store.delete_events(db, identifier, options):
                     document["events_updated"] = now()
                     store.save(db, "tracks", document)
                 return Response(status_code=204)
-            reverse = options.get("reverse_order", False)
-            selected.sort(key=lambda event: event_key(event, reverse), reverse=reverse)
-            return page_response(request, selected, options, event_listing=True)
+            return event_page(request, db, identifier, options)
         if not child:
             if method == "get":
                 if collection == "tracks" and options.get("include_timerange"):
-                    document["timerange"] = coverage(
-                        filter_events(store.events(db, identifier), options)
+                    document["timerange"] = store.track_coverage(
+                        db, identifier, options.get("timerange")
                     )
                 return JSONResponse(document)
             if collection == "tracks":
@@ -270,7 +302,12 @@ def dispatch(request, pool, body):
                 "SELECT 1 FROM tracks WHERE schema_id = %s LIMIT 1", (identifier,)
             ).fetchone():
                 raise APIError(400, "Payload schema is referenced by a track")
-            db.execute(f"DELETE FROM {collection} WHERE id = %s", (identifier,))
+            db.execute(
+                sql.SQL("DELETE FROM {} WHERE id = %s").format(
+                    sql.Identifier(collection)
+                ),
+                (identifier,),
+            )
             return Response(status_code=204)
         target = document["tags"] if len(child) == 2 else document
         key = request.path_params["name"] if len(child) == 2 else child[0]
@@ -353,6 +390,13 @@ def create_app(database=None, token=None, dev=None):
             APIError(503, "Database unavailable; retry later").body,
             status_code=503,
             headers={"Retry-After": "1"},
+        )
+
+    @app.exception_handler(psycopg.IntegrityError)
+    async def conflicting_change(request, exc):
+        return JSONResponse(
+            APIError(409, "A concurrent change conflicts with this request").body,
+            status_code=409,
         )
 
     @app.exception_handler(psycopg.Error)
