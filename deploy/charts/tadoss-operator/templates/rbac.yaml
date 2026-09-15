@@ -52,10 +52,12 @@ metadata:
 rules: {{- toYaml $rules | nindent 2 }}
 {{- end }}
 ---
+# A binding's roleRef is immutable, so this binding carries its own name and an
+# upgrade that renames the ClusterRole replaces the binding instead of editing it.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "tadoss-operator.fullname" . }}
+  name: {{ include "tadoss-operator.fullname" . }}-manager
   labels: {{- include "tadoss-operator.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
