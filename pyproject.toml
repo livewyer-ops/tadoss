@@ -31,7 +31,13 @@ otel = [
 ]
 
 [dependency-groups]
-dev = ["httpx>=0.28,<1", "ruff>=0.12,<1"]
+dev = [
+    "coverage>=7,<8",
+    "httpx>=0.28,<1",
+    "pyright>=1.1,<2",
+    "pyyaml>=6,<7",
+    "ruff>=0.12,<1",
+]
 
 [tool.setuptools.packages.find]
 include = ["tadoss*"]
@@ -43,4 +49,17 @@ tadoss = ["contract/*.json", "contract/*.md"]
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP"]
+select = ["E", "F", "I", "B", "UP", "S", "RUF", "SIM", "TD", "PERF"]
+ignore = ["TD003"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S105", "S106"]
+
+[tool.coverage.run]
+source = ["tadoss"]
+branch = true
+omit = ["tadoss/__main__.py"]
+
+[tool.pyright]
+typeCheckingMode = "basic"
+include = ["tadoss"]

@@ -1,0 +1,17 @@
+openapi: 3.1.0
+info:
+  title: Fixture
+  version: "0.0"
+paths:
+  /things:
+    get:
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: schemas/thing.json
+      parameters:
+        - $ref: ../docs/fragments.json#/parameters/limit
+components:
+  schemas: {}

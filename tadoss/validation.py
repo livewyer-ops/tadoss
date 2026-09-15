@@ -62,7 +62,8 @@ def compiled_payload_validator(serialised):
     dialect = schema.get("$schema", Draft202012Validator.META_SCHEMA["$id"])
     if not isinstance(dialect, str):
         raise APIError(400, "JSON Schema dialect must be a string URI")
-    validator_class = validator_for({"$schema": dialect}, default=None)
+    # None is a valid default at runtime although the stub types it more narrowly.
+    validator_class = validator_for({"$schema": dialect}, default=None)  # pyright: ignore[reportArgumentType]
     if validator_class is None:
         raise APIError(400, "Unsupported JSON Schema dialect")
     try:

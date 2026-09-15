@@ -1,3 +1,4 @@
+import base64
 import copy
 import json
 import os
@@ -15,7 +16,7 @@ from psycopg.conninfo import make_conninfo
 from psycopg.types.json import Jsonb
 
 from tadoss import store
-from tadoss.api import HANDLERS, create_app, env_flag
+from tadoss.api import HANDLERS, create_app, env_flag, resolve
 from tadoss.store import DEFAULT_DATABASE
 from tadoss.validation import (
     SPEC,
@@ -684,6 +685,71 @@ class StoreTests(unittest.TestCase):
                 ],
                 ["0001_initial", "0002_event_ranges"],
             )
+
+    def test_schema_listing_filters_and_paging(self):
+        second = str(uuid4())
+        self.send(
+            "PUT",
+            f"/schemas/{second}",
+            {
+                "id": second,
+                "schema": {},
+                "label": "Second",
+                "external_id": "x-2",
+                "tags": {"kind": ["b"]},
+            },
+            status=201,
+        )
+        self.assertEqual(len(self.send("GET", "/schemas").json()), 2)
+        for params, count in [
+            ({"label": "Second"}, 1),
+            ({"external_id": "x-2"}, 1),
+            ({"tag.kind": "b"}, 1),
+            ({"tag_exists.kind": "false"}, 1),
+            ({"tag.kind": "c"}, 0),
+        ]:
+            with self.subTest(params=params):
+                self.assertEqual(
+                    len(self.send("GET", "/schemas", params=params).json()), count
+                )
+        first = self.send("GET", "/schemas", params={"limit": 1})
+        self.assertEqual(first.headers["X-Paging-Limit"], "1")
+        self.assertEqual(first.headers["X-Paging-Count"], "1")
+        self.assertIn("X-Paging-NextKey", first.headers)
+        rest = self.send("GET", first.headers["Link"].split(">", 1)[0][1:])
+        self.assertEqual(len(rest.json()), 1)
+        self.assertNotIn("Link", rest.headers)
+        capped = self.send("GET", "/schemas", params={"limit": 5000})
+        self.assertEqual(capped.headers["X-Paging-Limit"], "1000")
+        negative = base64.urlsafe_b64encode(b"-1").decode()
+        self.send("GET", "/schemas", params={"page": negative}, status=400)
+        self.send("GET", "/schemas", params={"limit": "1", "limit ": "2"}, status=400)
+        duplicate = self.client.get("/schemas?limit=1&limit=2")
+        self.assertEqual(duplicate.status_code, 400)
+        head = self.send("HEAD", "/schemas")
+        self.assertEqual(head.content, b"")
+        self.assertEqual(
+            int(head.headers["Content-Length"]),
+            len(self.send("GET", "/schemas").content),
+        )
+        self.assertEqual(
+            resolve({"$ref": "#/components/schemas/uuid"}),
+            SPEC["components"]["schemas"]["uuid"],
+        )
+        self.assertEqual(
+            resolve({"$ref": "#/paths/~1tracks/get"}), SPEC["paths"]["/tracks"]["get"]
+        )
+
+    def test_docs_can_be_disabled(self):
+        with patch.dict(
+            os.environ, {"TADOSS_DOCS": "false", "TADOSS_AUTO_MIGRATE": "false"}
+        ):
+            app = create_app(self.database, token="test-secret")
+        with TestClient(app) as client:
+            self.assertEqual(client.get("/docs").status_code, 404)
+            self.assertEqual(client.get("/openapi.json").status_code, 200)
+        with TestClient(self.app) as client:
+            self.assertEqual(client.get("/docs").status_code, 200)
 
 
 class ConfigTests(unittest.TestCase):

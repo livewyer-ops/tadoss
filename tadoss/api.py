@@ -320,7 +320,7 @@ def handle_collection(call, table):
 
 def handle_resource(call, table):
     identifier = call.identifier
-    document = store.get(call.db, table, identifier, required=False)
+    document = store.find(call.db, table, identifier)
     if call.method == "put":
         validate(call.body, contract_schema("track" if table == "tracks" else "schema"))
         if call.body["id"] != identifier:
@@ -529,7 +529,14 @@ def create_app(database=None, token=None, dev=None):
         finally:
             pool.close()
 
-    app = FastAPI(title="TADOSS", version=__version__, lifespan=lifespan)
+    docs = env_flag("TADOSS_DOCS", True)
+    app = FastAPI(
+        title="TADOSS",
+        version=__version__,
+        lifespan=lifespan,
+        docs_url="/docs" if docs else None,
+        redoc_url="/redoc" if docs else None,
+    )
     app.state.pool = pool
     app.add_middleware(AccessLog)
     app.add_middleware(CorrelationIdMiddleware, header_name="X-Request-ID")

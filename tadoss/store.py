@@ -116,14 +116,21 @@ def table_name(table):
     return sql.Identifier(table)
 
 
-def get(db, table, identifier, required=True):
+def find(db, table, identifier):
+    """The document with this id, or None."""
     row = db.execute(
         sql.SQL("SELECT document FROM {} WHERE id = %s").format(table_name(table)),
         (identifier,),
     ).fetchone()
-    if row is None and required:
+    return None if row is None else row[0]
+
+
+def get(db, table, identifier):
+    """The document with this id; 404 when absent."""
+    document = find(db, table, identifier)
+    if document is None:
         raise APIError(404, "Resource not found")
-    return row[0] if row else None
+    return document
 
 
 def listing(db, table, overlapping=None):
@@ -360,16 +367,18 @@ def save_track(db, document, old=None, unlocking=False):
     document["updated_by"] = "tadoss"
     document["events_updated"] = old["events_updated"] if old else timestamp
     ignored = {"metadata_version", "metadata_updated", "events_updated"}
-    changed = old is None or {
-        k: v for k, v in document.items() if k not in ignored
-    } != {k: v for k, v in old.items() if k not in ignored}
-    document["metadata_updated"] = timestamp if changed else old["metadata_updated"]
-    if not document.get("metadata_version") or (
-        old and changed and document["metadata_version"] == old["metadata_version"]
-    ):
-        document["metadata_version"] = (
-            str(uuid4()) if changed else old["metadata_version"]
-        )
+    if old is None or {k: v for k, v in document.items() if k not in ignored} != {
+        k: v for k, v in old.items() if k not in ignored
+    }:
+        document["metadata_updated"] = timestamp
+        if not document.get("metadata_version") or (
+            old and document["metadata_version"] == old["metadata_version"]
+        ):
+            document["metadata_version"] = str(uuid4())
+    else:
+        document["metadata_updated"] = old["metadata_updated"]
+        if not document.get("metadata_version"):
+            document["metadata_version"] = old["metadata_version"]
     save(db, "tracks", document)
 
 

@@ -22,7 +22,7 @@ CREATE INDEX IF NOT EXISTS events_track ON events(track_id);
 
 def event_ranges(db):
     """Store event timeranges as PostgreSQL ranges with sort keys, indexed per track."""
-    from .store import range_columns  # noqa: PLC0415  (avoids an import cycle)
+    from .store import range_columns  # deferred: store imports this module
     from .validation import time_range
 
     db.execute("CREATE EXTENSION IF NOT EXISTS btree_gist")
@@ -95,7 +95,7 @@ def apply(db):
             " ON CONFLICT DO NOTHING"
         )
         db.execute("DROP TABLE tadoss_version")
-    done = set(applied(db))
+    done = set(applied(db) or [])
     for name, step in MIGRATIONS:
         if name in done:
             continue

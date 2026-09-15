@@ -1,0 +1,1 @@
+{"parameters": {"limit": {"name": "limit", "in": "query", "schema": {"$ref": "../api/schemas/other.json"}}}}

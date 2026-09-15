@@ -172,6 +172,7 @@ list as a query parameter; the HTTP client then encodes the parameter itself.
 | `TADOSS_POOL_MAX_SIZE` | `10` | Connections each replica may open; keep replicas times this below PostgreSQL `max_connections` |
 | `TADOSS_POOL_TIMEOUT` | `30` | Seconds a request waits for a pooled connection before returning 503 |
 | `TADOSS_MIGRATE_TIMEOUT` | `300` | Seconds `tadoss migrate` waits for the database before failing |
+| `TADOSS_DOCS` | `true` | Serve `/docs` and `/redoc`; disable on air-gapped hosts, as they load Swagger UI from a CDN |
 | `TADOSS_LOG_LEVEL` | `info` | Log level for every logger |
 | `TADOSS_LOG_FORMAT` | `json` | `json` or `text` log lines on stdout |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Unset | Enables OpenTelemetry traces and metrics over OTLP/HTTP |
@@ -228,10 +229,11 @@ task operator:generate     # Regenerate CRD, deepcopy code, chart CRD template a
 task kind:test             # Live Kubernetes integration suite
 ```
 
-`task check` runs ruff, the API tests, `go vet` and the operator tests with the race
-detector, `helm lint` for both charts including the ACME branch, kubeconform over every
-rendered manifest (the `Tadoss` resource is validated against a schema generated from its
-CRD), Chainsaw lint, yamlfmt and actionlint.
+`task check` runs ruff (including the security rules), pyright, the API tests with a
+90 percent coverage floor, `go vet`, golangci-lint, the operator's unit and envtest
+suites with the race detector, `helm lint` for both charts with every ci values file,
+kubeconform over every rendered manifest (the `Tadoss` resource is validated against
+a schema generated from its CRD), Chainsaw lint, yamlfmt and actionlint.
 
 Chainsaw checks provisioning, real API writes, persistence after pod replacement,
 drift correction, deletion protection, database retention, external PostgreSQL,
