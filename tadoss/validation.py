@@ -1,6 +1,7 @@
 import json
 import re
 from datetime import UTC, datetime
+from functools import lru_cache
 from pathlib import Path
 
 from jsonschema import Draft202012Validator, SchemaError, ValidationError
@@ -27,8 +28,15 @@ class APIError(Exception):
         super().__init__(summary)
 
 
+@lru_cache(maxsize=256)
+def contract_validator(serialised):
+    """A validator for a contract fragment, keyed by its canonical JSON."""
+    schema = json.loads(serialised)
+    return Draft202012Validator({"components": SPEC["components"], **schema})
+
+
 def validate(value, schema):
-    validator = Draft202012Validator({"components": SPEC["components"], **schema})
+    validator = contract_validator(json.dumps(schema, sort_keys=True))
     try:
         validator.validate(value)
     except ValidationError as exc:
@@ -43,6 +51,13 @@ def contract_schema(name):
 
 
 def payload_validator(schema):
+    return compiled_payload_validator(json.dumps(schema, sort_keys=True))
+
+
+@lru_cache(maxsize=128)
+def compiled_payload_validator(serialised):
+    """Validator for a stored payload schema; rejected schemas are not cached."""
+    schema = json.loads(serialised)
     # No remote schema retrieval: payload validation must not make network requests.
     dialect = schema.get("$schema", Draft202012Validator.META_SCHEMA["$id"])
     if not isinstance(dialect, str):

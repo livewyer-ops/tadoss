@@ -15,9 +15,15 @@ from psycopg.conninfo import make_conninfo
 from psycopg.types.json import Jsonb
 
 from tadoss import store
-from tadoss.api import create_app, env_flag
+from tadoss.api import HANDLERS, create_app, env_flag
 from tadoss.store import DEFAULT_DATABASE
-from tadoss.validation import SPEC, contract_schema, event_key, validate
+from tadoss.validation import (
+    SPEC,
+    contract_schema,
+    contract_validator,
+    event_key,
+    validate,
+)
 
 SCHEMA_ID = "adb87970-b03a-4266-b5d8-f3f6541fb73a"
 TRACK_ID = "20992138-abdb-4daf-84f3-a0e07dabb5ca"
@@ -358,6 +364,10 @@ class StoreTests(unittest.TestCase):
         contract = self.send("GET", "/openapi.json").json()
         self.assertEqual(contract["x-upstream-revision"], SPEC["x-upstream-revision"])
         self.assertNotIn("/service/webhooks", contract["paths"])
+        self.assertEqual(set(contract["paths"]), set(HANDLERS))
+        hits = contract_validator.cache_info().hits
+        validate(str(uuid4()), contract_schema("uuid"))
+        self.assertGreater(contract_validator.cache_info().hits, hits)
         for path, operations in contract["paths"].items():
             methods = {
                 method.upper() for method in operations if method != "parameters"

@@ -7,13 +7,14 @@ import logging
 import math
 import os
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+from functools import partial
 from urllib.parse import unquote
 
 import psycopg
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
-from psycopg import sql
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
@@ -225,6 +226,186 @@ def page_response(request, records, options):
     return JSONResponse(page, headers=headers)
 
 
+@dataclass
+class Call:
+    """One request after authentication, body parsing and option validation."""
+
+    request: Request
+    path: str
+    method: str
+    options: dict
+    body: object
+    params: dict
+    db: object = None
+
+    @property
+    def identifier(self):
+        return self.params.get("track_id", self.params.get("schema_id"))
+
+
+def handle_root(call):
+    return JSONResponse(["schemas", "service", "tracks", "track-delete-requests"])
+
+
+def handle_service(call):
+    return JSONResponse(
+        {
+            "name": "TADOSS",
+            "type": "urn:x-tads:service:tadoss",
+            "api_version": "0.1",
+            "service_version": __version__,
+        }
+    )
+
+
+def handle_delete_requests(call):
+    return page_response(call.request, [], call.options)
+
+
+def handle_delete_request(call):
+    raise APIError(404, "Deletion request not found; deletions complete synchronously")
+
+
+def handle_collection(call, table):
+    records = store.listing(call.db, table, call.options.get("timerange"))
+    return page_response(
+        call.request, filter_records(records, call.options), call.options
+    )
+
+
+def handle_resource(call, table):
+    identifier = call.identifier
+    document = store.get(call.db, table, identifier, required=False)
+    if call.method == "put":
+        validate(call.body, contract_schema("track" if table == "tracks" else "schema"))
+        if call.body["id"] != identifier:
+            raise APIError(400, "Body id must match the path id")
+        save_record = store.save_track if table == "tracks" else store.save_schema
+        save_record(call.db, call.body, document)
+        if document:
+            return Response(status_code=204)
+        location = {"Location": str(call.request.url.path)}
+        return JSONResponse(call.body, status_code=201, headers=location)
+    if document is None:
+        raise APIError(404, "Resource not found")
+    if call.method == "get":
+        if table == "tracks" and call.options.get("include_timerange"):
+            document["timerange"] = store.track_coverage(
+                call.db, identifier, call.options.get("timerange")
+            )
+        return JSONResponse(document)
+    if table == "tracks":
+        store.writable(document)
+    elif store.schema_in_use(call.db, identifier):
+        raise APIError(400, "Payload schema is referenced by a track")
+    store.delete(call.db, table, identifier)
+    return Response(status_code=204)
+
+
+def handle_events(call):
+    track = store.get(call.db, "tracks", call.identifier)
+    if call.method == "post":
+        return JSONResponse(store.write_events(call.db, track, call.body))
+    if call.method == "delete":
+        store.writable(track)
+        if store.delete_events(call.db, call.identifier, call.options):
+            track["events_updated"] = now()
+            store.save(call.db, "tracks", track)
+        return Response(status_code=204)
+    return event_page(call.request, call.db, call.identifier, call.options)
+
+
+def handle_property(call, table, key=None):
+    """Read, replace or remove one property, or one tag when key is None."""
+    document = store.get(call.db, table, call.identifier)
+    target = document if key is not None else document["tags"]
+    key = key if key is not None else call.params["name"]
+    if call.method == "get":
+        if key not in target:
+            raise APIError(404, "Property not found")
+        return JSONResponse(target[key])
+    old = copy.deepcopy(document)
+    if call.method == "delete":
+        if key not in target:
+            raise APIError(404, "Property not found")
+        del target[key]
+    else:
+        operation = SPEC["paths"][call.path]["put"]
+        validate(
+            call.body, operation["requestBody"]["content"]["application/json"]["schema"]
+        )
+        target[key] = call.body
+    if table == "tracks":
+        store.save_track(call.db, document, old, unlocking=key == "read_only")
+    else:
+        store.save_schema(call.db, document, old)
+    return Response(status_code=204)
+
+
+# Contract path -> (handler, needs a database transaction). Kept explicit so the
+# published contract and the implemented routes can be compared in tests.
+HANDLERS = {
+    "/": (handle_root, False),
+    "/service": (handle_service, False),
+    "/track-delete-requests": (handle_delete_requests, False),
+    "/track-delete-requests/{request_id}": (handle_delete_request, False),
+    "/schemas": (partial(handle_collection, table="schemas"), True),
+    "/schemas/{schema_id}": (partial(handle_resource, table="schemas"), True),
+    "/schemas/{schema_id}/schema": (
+        partial(handle_property, table="schemas", key="schema"),
+        True,
+    ),
+    "/schemas/{schema_id}/tags": (
+        partial(handle_property, table="schemas", key="tags"),
+        True,
+    ),
+    "/schemas/{schema_id}/tags/{name}": (
+        partial(handle_property, table="schemas"),
+        True,
+    ),
+    "/schemas/{schema_id}/description": (
+        partial(handle_property, table="schemas", key="description"),
+        True,
+    ),
+    "/schemas/{schema_id}/label": (
+        partial(handle_property, table="schemas", key="label"),
+        True,
+    ),
+    "/schemas/{schema_id}/external_id": (
+        partial(handle_property, table="schemas", key="external_id"),
+        True,
+    ),
+    "/tracks": (partial(handle_collection, table="tracks"), True),
+    "/tracks/{track_id}": (partial(handle_resource, table="tracks"), True),
+    "/tracks/{track_id}/tags": (
+        partial(handle_property, table="tracks", key="tags"),
+        True,
+    ),
+    "/tracks/{track_id}/tags/{name}": (partial(handle_property, table="tracks"), True),
+    "/tracks/{track_id}/description": (
+        partial(handle_property, table="tracks", key="description"),
+        True,
+    ),
+    "/tracks/{track_id}/label": (
+        partial(handle_property, table="tracks", key="label"),
+        True,
+    ),
+    "/tracks/{track_id}/read_only": (
+        partial(handle_property, table="tracks", key="read_only"),
+        True,
+    ),
+    "/tracks/{track_id}/allow_overlaps": (
+        partial(handle_property, table="tracks", key="allow_overlaps"),
+        True,
+    ),
+    "/tracks/{track_id}/editable_events": (
+        partial(handle_property, table="tracks", key="editable_events"),
+        True,
+    ),
+    "/tracks/{track_id}/events": (handle_events, True),
+}
+
+
 def dispatch(request, pool, body):
     path = request.scope["route"].path
     method = "get" if request.method == "HEAD" else request.method.lower()
@@ -232,105 +413,40 @@ def dispatch(request, pool, body):
     for name, value in request.path_params.items():
         if name != "name":
             validate(value, contract_schema("uuid"))
-    if path == "/":
-        return JSONResponse(["schemas", "service", "tracks", "track-delete-requests"])
-    if path == "/service":
-        return JSONResponse(
-            {
-                "name": "TADOSS",
-                "type": "urn:x-tads:service:tadoss",
-                "api_version": "0.1",
-                "service_version": __version__,
-            }
-        )
-    if path == "/track-delete-requests":
-        return page_response(request, [], options)
-    if path.startswith("/track-delete-requests/"):
-        raise APIError(
-            404, "Deletion request not found; deletions complete synchronously"
-        )
-    collection = path.split("/")[1]
-    identifier = request.path_params.get(
-        "track_id", request.path_params.get("schema_id")
-    )
+    handler, transactional = HANDLERS[path]
+    call = Call(request, path, method, options, body, dict(request.path_params))
+    if not transactional:
+        return handler(call)
     write = method in {"put", "post", "delete"}
-    with store.transaction(pool, write=write, lock=identifier) as db:
-        if identifier is None:
-            records = store.listing(db, collection, options.get("timerange"))
-            return page_response(request, filter_records(records, options), options)
-        document = store.get(db, collection, identifier, required=False)
-        child = path.split("/")[3:]
-        if not child and method == "put":
-            validate(
-                body, contract_schema("track" if collection == "tracks" else "schema")
-            )
-            if body["id"] != identifier:
-                raise APIError(400, "Body id must match the path id")
-            save_record = (
-                store.save_track if collection == "tracks" else store.save_schema
-            )
-            save_record(db, body, document)
-            return (
-                Response(status_code=204)
-                if document
-                else JSONResponse(
-                    body, status_code=201, headers={"Location": str(request.url.path)}
-                )
-            )
-        if document is None:
-            raise APIError(404, "Resource not found")
-        if child and child[0] == "events":
-            if method == "post":
-                return JSONResponse(store.write_events(db, document, body))
-            if method == "delete":
-                store.writable(document)
-                if store.delete_events(db, identifier, options):
-                    document["events_updated"] = now()
-                    store.save(db, "tracks", document)
-                return Response(status_code=204)
-            return event_page(request, db, identifier, options)
-        if not child:
-            if method == "get":
-                if collection == "tracks" and options.get("include_timerange"):
-                    document["timerange"] = store.track_coverage(
-                        db, identifier, options.get("timerange")
-                    )
-                return JSONResponse(document)
-            if collection == "tracks":
-                store.writable(document)
-            elif db.execute(
-                "SELECT 1 FROM tracks WHERE schema_id = %s LIMIT 1", (identifier,)
-            ).fetchone():
-                raise APIError(400, "Payload schema is referenced by a track")
-            db.execute(
-                sql.SQL("DELETE FROM {} WHERE id = %s").format(
-                    sql.Identifier(collection)
-                ),
-                (identifier,),
-            )
-            return Response(status_code=204)
-        target = document["tags"] if len(child) == 2 else document
-        key = request.path_params["name"] if len(child) == 2 else child[0]
-        if method == "get":
-            if key not in target:
-                raise APIError(404, "Property not found")
-            return JSONResponse(target[key])
-        old = copy.deepcopy(document)
-        if method == "delete":
-            if key not in target:
-                raise APIError(404, "Property not found")
-            del target[key]
-        else:
-            schema = SPEC["paths"][path]["put"]["requestBody"]["content"][
-                "application/json"
-            ]["schema"]
-            validate(body, schema)
-            target[key] = body
-        if collection == "tracks":
-            store.save_track(db, document, old, unlocking=child == ["read_only"])
-        else:
-            store.save_schema(db, document, old)
-        return Response(status_code=204)
+    with store.transaction(pool, write=write, lock=call.identifier) as db:
+        call.db = db
+        return handler(call)
+
+
+def published_contract():
+    """The bundled TADS contract restricted to what this service implements."""
+    contract = copy.deepcopy(SPEC)
+    contract["info"] = {
+        **contract["info"],
+        "title": "TADOSS",
+        "description": (
+            "TADS 0.1 core API. Webhook delivery is not implemented. "
+            "Deletions complete synchronously."
+        ),
+    }
+    contract["info"].pop("contact", None)
+    contract["servers"] = [{"url": "/"}]
+    contract["security"] = [{"bearer_token_auth": []}, {"url_token_auth": []}]
+    contract["components"]["securitySchemes"].pop("basic_auth", None)
+    contract.pop("webhooks", None)
+    for path in list(contract["paths"]):
+        if path.startswith("/service/webhooks"):
+            del contract["paths"][path]
+            continue
+        for operation in contract["paths"][path].values():
+            if isinstance(operation, dict):
+                operation.get("responses", {}).pop("202", None)
+    return contract
 
 
 def create_app(database=None, token=None, dev=None):
@@ -467,32 +583,9 @@ def create_app(database=None, token=None, dev=None):
             response.body = b""
         return response
 
-    contract = copy.deepcopy(SPEC)
-    contract["info"] = {
-        **contract["info"],
-        "title": "TADOSS",
-        "description": (
-            "TADS 0.1 core API. Webhook delivery is not implemented. "
-            "Deletions complete synchronously."
-        ),
-    }
-    contract["info"].pop("contact", None)
-    contract["servers"] = [{"url": "/"}]
-    contract["security"] = [{"bearer_token_auth": []}, {"url_token_auth": []}]
-    contract["components"]["securitySchemes"].pop("basic_auth", None)
-    contract.pop("webhooks", None)
-    for path in list(contract["paths"]):
-        if path.startswith("/service/webhooks"):
-            del contract["paths"][path]
-            continue
-        methods = [
-            method.upper()
-            for method in contract["paths"][path]
-            if method != "parameters"
-        ]
-        for operation in contract["paths"][path].values():
-            if isinstance(operation, dict):
-                operation.get("responses", {}).pop("202", None)
+    contract = published_contract()
+    for path, operations in contract["paths"].items():
+        methods = [m.upper() for m in operations if m != "parameters"]
         app.add_api_route(path, endpoint, methods=methods, include_in_schema=False)
     app.openapi = lambda: contract
     return app

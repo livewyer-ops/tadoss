@@ -23,6 +23,8 @@ from .validation import (
 )
 
 DEFAULT_DATABASE = "postgresql://tadoss:tadoss@127.0.0.1:15432/tadoss"
+# Tables addressed by name from the API; anything else is a programming error.
+TABLES = frozenset({"schemas", "tracks"})
 STATEMENT_TIMEOUT = os.getenv("TADOSS_STATEMENT_TIMEOUT", "30s")
 # Advisory lock namespace: the single-key form serialises migrations, the two-key
 # form with a hashed resource id serialises writes to one track or schema.
@@ -108,9 +110,15 @@ def sort_keys_timerange(start, start_excl, end, end_incl):
     return TimeRange(lower, upper, inclusivity)
 
 
+def table_name(table):
+    if table not in TABLES:
+        raise ValueError(f"Unknown table {table!r}")
+    return sql.Identifier(table)
+
+
 def get(db, table, identifier, required=True):
     row = db.execute(
-        sql.SQL("SELECT document FROM {} WHERE id = %s").format(sql.Identifier(table)),
+        sql.SQL("SELECT document FROM {} WHERE id = %s").format(table_name(table)),
         (identifier,),
     ).fetchone()
     if row is None and required:
@@ -119,13 +127,13 @@ def get(db, table, identifier, required=True):
 
 
 def listing(db, table, overlapping=None):
-    query = sql.SQL("SELECT document FROM {}").format(sql.Identifier(table))
+    query = sql.SQL("SELECT document FROM {}").format(table_name(table))
     params = []
     if overlapping is not None:
         query += sql.SQL(
             " WHERE EXISTS (SELECT 1 FROM events e WHERE e.track_id = {}.id"
             " AND e.timerange && %s)"
-        ).format(sql.Identifier(table))
+        ).format(table_name(table))
         params.append(range_columns(overlapping)[0])
     return [row[0] for row in db.execute(query + sql.SQL(" ORDER BY id"), params)]
 
@@ -278,12 +286,27 @@ def save(db, table, document):
         sql.SQL(
             "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT (id) DO UPDATE SET {}"
         ).format(
-            sql.Identifier(table),
+            table_name(table),
             sql.SQL(", ").join(map(sql.Identifier, columns)),
             sql.SQL(", ").join(sql.Placeholder() * len(columns)),
             assignments,
         ),
         values,
+    )
+
+
+def delete(db, table, identifier):
+    db.execute(
+        sql.SQL("DELETE FROM {} WHERE id = %s").format(table_name(table)), (identifier,)
+    )
+
+
+def schema_in_use(db, schema_id):
+    return (
+        db.execute(
+            "SELECT 1 FROM tracks WHERE schema_id = %s LIMIT 1", (schema_id,)
+        ).fetchone()
+        is not None
     )
 
 
