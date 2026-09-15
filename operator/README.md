@@ -114,7 +114,9 @@ upgrade recreates a Deployment that still carries the old selector once, keeping
 its pods running. The schema
 Job must complete before API changes are applied. A failed migration sets
 `Ready=False` with reason `SchemaFailed`; fix the underlying cause and delete
-the failed Job to retry. Changing the image, the database credentials or the
+the failed Job to retry. The migration waits up to five minutes for the database,
+which covers a PostgreSQL restart triggered by the same change, and the Job is
+allowed fifteen minutes in total. Changing the image, the database credentials or the
 API `resources` creates a new Job and prunes old Jobs after success. Pin
 immutable image tags or digests for reliable upgrades.
 

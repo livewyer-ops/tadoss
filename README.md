@@ -171,6 +171,7 @@ list as a query parameter; the HTTP client then encodes the parameter itself.
 | `TADOSS_POOL_MIN_SIZE` | `1` | Connections each replica keeps open |
 | `TADOSS_POOL_MAX_SIZE` | `10` | Connections each replica may open; keep replicas times this below PostgreSQL `max_connections` |
 | `TADOSS_POOL_TIMEOUT` | `30` | Seconds a request waits for a pooled connection before returning 503 |
+| `TADOSS_MIGRATE_TIMEOUT` | `300` | Seconds `tadoss migrate` waits for the database before failing |
 | `TADOSS_HOST` | `127.0.0.1` | Listen address; container uses `0.0.0.0` |
 | `TADOSS_PORT` | `8000` | HTTP port |
 

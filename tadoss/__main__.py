@@ -19,7 +19,9 @@ def main():
         )
         if database is None:
             raise SystemExit("Set TADOSS_DATABASE")
-        with create_pool(database, min_size=1, max_size=1) as pool:
+        # The database may be restarting when a migration Job starts, so wait for it.
+        timeout = float(os.getenv("TADOSS_MIGRATE_TIMEOUT", "300"))
+        with create_pool(database, min_size=1, max_size=1, timeout=timeout) as pool:
             initialize(pool)
         return
     uvicorn.run(

@@ -28,8 +28,10 @@ const (
 	suffixDBApp = "-db-app"
 	suffixToken = "-api-token"
 
+	// The migration waits up to five minutes for a restarting database, so the Job
+	// deadline must comfortably exceed that plus the retries.
 	schemaJobBackoffLimit    = 4
-	schemaJobDeadlineSeconds = 300
+	schemaJobDeadlineSeconds = 900
 )
 
 // workloadSet holds the API workloads of an instance in apply order.
