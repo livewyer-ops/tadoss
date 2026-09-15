@@ -20,6 +20,33 @@ leaves it in place; set `crds.install=false` when another release owns it. Insta
 the chart requires cluster-level permissions for CRDs, RBAC and the native Kubernetes
 ValidatingAdmissionPolicy. No custom admission webhook server is required.
 
+## Chart values
+
+`values.schema.json` rejects unknown keys. The main values:
+
+| Value | Default | Purpose |
+| --- | --- | --- |
+| `image.repository`, `image.tag`, `image.pullPolicy` | `livewyer/tadoss-operator`, chart `appVersion` | Operator image |
+| `imagePullSecrets` | `[]` | Pull Secrets for a private registry |
+| `watchNamespaces` | `[]` | Reconcile only these namespaces; renders Roles instead of a ClusterRole |
+| `serviceAccount.create`, `.name`, `.annotations` | `true`, release name | Identity of the manager |
+| `rbac.create` | `true` | Render the generated rules |
+| `leaderElection.enabled` | `true` | Lease in the release namespace |
+| `logging.level`, `logging.encoder` | `info`, `json` | Controller logging |
+| `metrics.enabled`, `.port`, `.secure` | `true`, `8443`, `true` | Metrics endpoint and its authentication |
+| `metrics.serviceMonitor.enabled`, `.labels` | `false` | Prometheus Operator scraping |
+| `deletionProtection.enabled`, `.namespaceSelector`, `.exemptUsers` | `true`, `{}`, `[]` | Admission policy scope |
+| `networkPolicy.enabled`, `.metricsFrom`, `.extraEgress` | `false` | Isolate the manager pod |
+| `podDisruptionBudget.enabled`, `.minAvailable` | `false`, `1` | For `replicas` above one |
+| `resources`, `nodeSelector`, `tolerations`, `affinity`, `topologySpreadConstraints`, `priorityClassName`, `podAnnotations`, `extraArgs` | | Scheduling and pod details |
+
+Metrics are served over HTTPS and require a bearer token whose subject may `get`
+the `/metrics` non-resource URL; bind the rendered
+`<namespace>-<release>-metrics-reader` ClusterRole to the scraper's
+ServiceAccount, or set `metrics.secure=false` on a trusted network. The
+NetworkPolicy allows probes, metrics from `networkPolicy.metricsFrom`, DNS and
+the Kubernetes API; Kind's default network plugin does not enforce policies.
+
 ```yaml
 apiVersion: tadoss.livewyer.io/v1alpha1
 kind: Tadoss
@@ -113,7 +140,8 @@ The chart value `deletionProtection.enabled` (default `true`) installs the
 policy and its binding, `deletionProtection.namespaceSelector` limits the
 binding to matching namespaces, and `deletionProtection.exemptUsers` lists
 usernames the policy never blocks. Break glass with
-`kubectl delete validatingadmissionpolicybinding tadoss-deletion-protection`;
+`kubectl delete validatingadmissionpolicybinding <namespace>-<release>-deletion-protection`
+(`tadoss-system-tadoss-operator-deletion-protection` for the default install);
 the finalizer still requires `deletionProtection: false`.
 
 `deletionPolicy: Retain` (default) detaches the owned CNPG Cluster and preserves

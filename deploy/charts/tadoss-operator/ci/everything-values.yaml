@@ -1,0 +1,27 @@
+replicas: 2
+metrics:
+  serviceMonitor:
+    enabled: true
+deletionProtection:
+  exemptUsers: [admin@example.com]
+  namespaceSelector:
+    matchLabels:
+      team: media
+networkPolicy:
+  enabled: true
+  metricsFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+podDisruptionBudget:
+  enabled: true
+nodeSelector:
+  kubernetes.io/os: linux
+tolerations:
+  - key: node-role.kubernetes.io/control-plane
+    operator: Exists
+    effect: NoSchedule
+priorityClassName: system-cluster-critical
+podAnnotations:
+  example.com/owner: platform
+extraArgs: ["--zap-stacktrace-level=error"]

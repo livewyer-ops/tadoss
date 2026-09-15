@@ -1,0 +1,23 @@
+The TADOSS operator is installed in {{ .Release.Namespace }} as release {{ .Release.Name }}.
+
+Create an instance:
+
+  kubectl create namespace tads
+  kubectl apply --server-side -k deploy/instances/base
+
+{{- if .Values.crds.install }}
+
+The Tadoss CRD is a chart template with helm.sh/resource-policy: keep, so helm upgrade
+updates it and helm uninstall leaves it in place.
+{{- end }}
+{{- if .Values.deletionProtection.enabled }}
+
+Deleting an instance requires spec.deletionProtection=false. Break glass with:
+
+  kubectl delete validatingadmissionpolicybinding {{ include "tadoss-operator.fullname" . }}-deletion-protection
+{{- end }}
+{{- if and .Values.metrics.enabled .Values.metrics.secure }}
+
+Metrics are served over HTTPS on {{ .Release.Name }}-metrics:{{ .Values.metrics.port }} and
+require a token bound to the {{ include "tadoss-operator.fullname" . }}-metrics-reader ClusterRole.
+{{- end }}

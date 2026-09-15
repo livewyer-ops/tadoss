@@ -1,7 +1,14 @@
 {{- if .Values.rbac.create }}
 {{- $rules := (.Files.Get "files/role.yaml" | fromYaml).rules }}
 {{- $namespaced := list }}
-{{- range $rules }}{{ if not (has "namespaces" .resources) }}{{ $namespaced = append $namespaced . }}{{ end }}{{ end }}
+{{- $clusterScoped := list }}
+{{- range $rules }}
+{{- if or (has "namespaces" .resources) (has "authentication.k8s.io" .apiGroups) (has "authorization.k8s.io" .apiGroups) }}
+{{- $clusterScoped = append $clusterScoped . }}
+{{- else }}
+{{- $namespaced = append $namespaced . }}
+{{- end }}
+{{- end }}
 {{- if .Values.watchNamespaces }}
 {{- range .Values.watchNamespaces }}
 apiVersion: rbac.authorization.k8s.io/v1
@@ -24,20 +31,18 @@ roleRef:
   name: {{ include "tadoss-operator.fullname" $ }}
 subjects:
   - kind: ServiceAccount
-    name: {{ $.Release.Name }}
+    name: {{ include "tadoss-operator.serviceAccountName" $ }}
     namespace: {{ $.Release.Namespace }}
 ---
 {{- end }}
-# Namespace termination is observed cluster-wide even when reconciliation is scoped.
+# Namespace termination and metrics authentication stay cluster-wide when
+# reconciliation is scoped.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: {{ include "tadoss-operator.fullname" . }}
   labels: {{- include "tadoss-operator.labels" . | nindent 4 }}
-rules:
-  - apiGroups: [""]
-    resources: [namespaces]
-    verbs: [get, list, watch]
+rules: {{- toYaml $clusterScoped | nindent 2 }}
 {{- else }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -58,7 +63,7 @@ roleRef:
   name: {{ include "tadoss-operator.fullname" . }}
 subjects:
   - kind: ServiceAccount
-    name: {{ .Release.Name }}
+    name: {{ include "tadoss-operator.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
 ---
 # Leader election needs a lease and events in the release namespace only.
@@ -88,6 +93,6 @@ roleRef:
   name: {{ .Release.Name }}-leader-election
 subjects:
   - kind: ServiceAccount
-    name: {{ .Release.Name }}
+    name: {{ include "tadoss-operator.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
 {{- end }}

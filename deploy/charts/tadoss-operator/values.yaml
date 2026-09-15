@@ -1,7 +1,9 @@
 image:
   repository: livewyer/tadoss-operator
-  tag: "0.1.0"
+  # Defaults to the chart's appVersion when empty.
+  tag: ""
   pullPolicy: IfNotPresent
+imagePullSecrets: []
 # The CRD is a chart template with helm.sh/resource-policy: keep, so upgrades update it and
 # uninstall retains it. Set install to false when another release owns the CRD.
 crds:
@@ -10,15 +12,29 @@ replicas: 1
 # Namespaces to reconcile. Empty watches the whole cluster with a ClusterRole; a list
 # scopes both the cache and the RBAC to Roles in those namespaces.
 watchNamespaces: []
+serviceAccount:
+  create: true
+  # Defaults to the release name.
+  name: ""
+  annotations: {}
 rbac:
   create: true
-resources:
-  requests:
-    cpu: 100m
-    memory: 128Mi
-  limits:
-    cpu: "1"
-    memory: 512Mi
+leaderElection:
+  enabled: true
+logging:
+  # debug, info or error.
+  level: info
+  # json or console.
+  encoder: json
+metrics:
+  enabled: true
+  port: 8443
+  # Serve over HTTPS and require a bearer token allowed to get /metrics; the chart
+  # renders a ClusterRole named <release>-metrics-reader for scrapers.
+  secure: true
+  serviceMonitor:
+    enabled: false
+    labels: {}
 # Admission policy that denies deleting a Tadoss while spec.deletionProtection is true.
 # Requests from the namespace controller and requests against a terminating namespace are
 # never denied, so namespace deletion completes.
@@ -28,3 +44,27 @@ deletionProtection:
   namespaceSelector: {}
   # Usernames the policy does not apply to.
   exemptUsers: []
+# Isolates the manager pod: only the metrics port accepts ingress, and egress is limited to
+# DNS, the Kubernetes API and any extra rules listed here.
+networkPolicy:
+  enabled: false
+  # NetworkPolicy peers allowed to scrape metrics; empty allows none.
+  metricsFrom: []
+  extraEgress: []
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+priorityClassName: ""
+podAnnotations: {}
+extraArgs: []

@@ -2,6 +2,10 @@
 {{- printf "%s-%s" .Release.Namespace .Release.Name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{- define "tadoss-operator.serviceAccountName" -}}
+{{- default .Release.Name .Values.serviceAccount.name -}}
+{{- end -}}
+
 {{- define "tadoss-operator.selectorLabels" -}}
 app.kubernetes.io/name: tadoss-operator
 app.kubernetes.io/instance: {{ .Release.Name }}

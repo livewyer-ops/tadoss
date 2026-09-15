@@ -16,14 +16,20 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 )
 
+// Authenticated metrics need TokenReview and SubjectAccessReview.
+// +kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create
+// +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
+
 func main() {
 	var namespaces, metrics, probes string
-	var leaderElection bool
+	var leaderElection, metricsSecure bool
 	flag.StringVar(&namespaces, "watch-namespaces", "", "Comma-separated namespace scope; empty watches all")
-	flag.StringVar(&metrics, "metrics-bind-address", ":8080", "Metrics address")
+	flag.StringVar(&metrics, "metrics-bind-address", ":8443", "Metrics address; 0 disables the endpoint")
+	flag.BoolVar(&metricsSecure, "metrics-secure", true, "Serve metrics over HTTPS and require a token with access to /metrics")
 	flag.StringVar(&probes, "health-probe-bind-address", ":8081", "Health address")
 	flag.BoolVar(&leaderElection, "leader-elect", true, "Use Kubernetes leader election")
 	opts := zap.Options{}
@@ -34,13 +40,17 @@ func main() {
 	must(clientgoscheme.AddToScheme(scheme))
 	must(tadossv1.AddToScheme(scheme))
 	must(cnpgv1.AddToScheme(scheme))
+	metricsOptions := metricsserver.Options{BindAddress: metrics, SecureServing: metricsSecure}
+	if metricsSecure {
+		metricsOptions.FilterProvider = filters.WithAuthenticationAndAuthorization
+	}
 	options := ctrl.Options{
 		Scheme:                        scheme,
 		LeaderElection:                leaderElection,
 		LeaderElectionID:              "tadoss-operator.tadoss.livewyer.io",
 		LeaderElectionReleaseOnCancel: true,
 		HealthProbeBindAddress:        probes,
-		Metrics:                       metricsserver.Options{BindAddress: metrics},
+		Metrics:                       metricsOptions,
 		// Secrets are watched as metadata only and read live, so credential contents never sit in the cache.
 		Cache:  cache.Options{DefaultTransform: cache.TransformStripManagedFields()},
 		Client: client.Options{Cache: &client.CacheOptions{DisableFor: []client.Object{&corev1.Secret{}}}},

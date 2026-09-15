@@ -84,11 +84,16 @@ tasks:
       - yamlfmt
 
   charts:lint:
-    desc: Lint the operator and issuer charts, including the ACME branch
+    desc: Lint the operator and issuer charts with every ci values file
     cmds:
       - helm lint deploy/charts/tadoss-operator
+      - for: {var: OPERATOR_CI_VALUES}
+        cmd: helm lint deploy/charts/tadoss-operator -f {{.ITEM}}
       - helm lint deploy/charts/tadoss-issuer
       - helm lint deploy/charts/tadoss-issuer -f deploy/charts/tadoss-issuer/ci/acme-values.yaml
+    vars:
+      OPERATOR_CI_VALUES:
+        sh: ls deploy/charts/tadoss-operator/ci/*.yaml
 
   schema:generate:
     desc: Convert the Tadoss CRD into a kubeconform JSON schema
@@ -112,6 +117,8 @@ tasks:
         cmd: '{{.HELMFILE}} --state-values-set instance.spec.profile={{.ITEM}} template -l name=tadoss | kubeconform {{.KUBECONFORM_ARGS}}'
       # The upstream schema store has no CustomResourceDefinition schema; the API server validates it.
       - '{{.HELMFILE}} template -l name=tadoss-operator | kubeconform {{.KUBECONFORM_ARGS}} -skip CustomResourceDefinition'
+      - for: {var: OPERATOR_CI_VALUES}
+        cmd: helm template tadoss-operator deploy/charts/tadoss-operator -n tadoss-system -f {{.ITEM}} | kubeconform {{.KUBECONFORM_ARGS}} -skip CustomResourceDefinition
       - '{{.HELMFILE}} --state-values-set tls.mode=acme,tls.acme.email=ops@example.com template -l name=tadoss-issuer | kubeconform {{.KUBECONFORM_ARGS}}'
       - chainsaw lint configuration -f operator/test/chainsaw/configuration.yaml
       - for: {var: CHAINSAW_TESTS}
@@ -119,6 +126,8 @@ tasks:
     vars:
       CHAINSAW_TESTS:
         sh: find operator/test/chainsaw -name chainsaw-test.yaml | sort
+      OPERATOR_CI_VALUES:
+        sh: ls deploy/charts/tadoss-operator/ci/*.yaml
 
   operator:generate:
     desc: Regenerate the CRD, deepcopy code, chart CRD template and RBAC
