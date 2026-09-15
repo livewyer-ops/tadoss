@@ -1,0 +1,51 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: namespace-deletion-releases-protected-instance
+  labels:
+    test.tadoss.io/domain: operations
+    test.tadoss.io/tier: standard
+spec:
+  steps:
+    - name: delete-namespace-with-protected-instance
+      try:
+        - apply:
+            resource:
+              apiVersion: tadoss.livewyer.io/v1alpha1
+              kind: Tadoss
+              metadata:
+                name: protected
+              spec:
+                profile: local-kind
+                image: ($values.apiImage)
+                deletionProtection: true
+                database:
+                  provider: managed
+        - assert:
+            resource:
+              apiVersion: tadoss.livewyer.io/v1alpha1
+              kind: Tadoss
+              metadata:
+                name: protected
+                finalizers:
+                  - tadoss.livewyer.io/finalizer
+        - delete:
+            ref:
+              apiVersion: v1
+              kind: Namespace
+              name: ($namespace)
+            timeout: 5m
+        - wait:
+            apiVersion: v1
+            kind: Namespace
+            name: ($namespace)
+            timeout: 5m
+            for:
+              deletion: {}
+        - error:
+            resource:
+              apiVersion: tadoss.livewyer.io/v1alpha1
+              kind: Tadoss
+              metadata:
+                name: protected
+                namespace: ($namespace)

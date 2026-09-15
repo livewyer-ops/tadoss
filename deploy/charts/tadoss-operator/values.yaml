@@ -15,3 +15,12 @@ resources:
   limits:
     cpu: "1"
     memory: 512Mi
+# Admission policy that denies deleting a Tadoss while spec.deletionProtection is true.
+# Requests from the namespace controller and requests against a terminating namespace are
+# never denied, so namespace deletion completes.
+deletionProtection:
+  enabled: true
+  # Restricts the binding to matching namespaces; empty means every namespace.
+  namespaceSelector: {}
+  # Usernames the policy does not apply to.
+  exemptUsers: []

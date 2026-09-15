@@ -22,9 +22,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -42,6 +45,7 @@ type TadossReconciler struct {
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups="",resources=secrets;services,verbs=get;list;watch;create;patch;delete
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;patch;delete
@@ -242,10 +246,18 @@ func (r *TadossReconciler) finalize(ctx context.Context, t *tadossv1.Tadoss) (ct
 	if !controllerutil.ContainsFinalizer(t, finalizer) {
 		return ctrl.Result{}, nil
 	}
-	if t.Spec.DeletionProtection {
-		return r.pending(ctx, t, "DeletionBlocked", "Set spec.deletionProtection=false to permit deletion")
+	terminating, err := r.namespaceTerminating(ctx, t.Namespace)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
-	if t.Spec.Database.Provider == "managed" && t.Spec.DeletionPolicy == "Retain" {
+	if terminating {
+		logf.FromContext(ctx).Info("namespace is terminating; releasing the finalizer regardless of deletionProtection and deletionPolicy")
+	} else if t.Spec.DeletionProtection {
+		if err := r.status(ctx, t, "Progressing", "DeletionBlocked", "Set spec.deletionProtection=false to permit deletion", false); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: time.Minute}, nil
+	} else if t.Spec.Database.Provider == "managed" && t.Spec.DeletionPolicy == "Retain" {
 		cluster := &cnpgv1.Cluster{}
 		err := r.Get(ctx, client.ObjectKey{Namespace: t.Namespace, Name: t.Name + "-db"}, cluster)
 		if err != nil && !apierrors.IsNotFound(err) {
@@ -268,6 +280,16 @@ func (r *TadossReconciler) finalize(ctx context.Context, t *tadossv1.Tadoss) (ct
 	before := t.DeepCopy()
 	controllerutil.RemoveFinalizer(t, finalizer)
 	return ctrl.Result{}, r.Patch(ctx, t, client.MergeFrom(before))
+}
+
+// namespaceTerminating reports whether the instance namespace carries a deletion timestamp.
+func (r *TadossReconciler) namespaceTerminating(ctx context.Context, name string) (bool, error) {
+	ns := &metav1.PartialObjectMetadata{}
+	ns.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Namespace"))
+	if err := r.Get(ctx, client.ObjectKey{Name: name}, ns); err != nil {
+		return false, client.IgnoreNotFound(err)
+	}
+	return !ns.DeletionTimestamp.IsZero(), nil
 }
 
 func (r *TadossReconciler) pending(ctx context.Context, t *tadossv1.Tadoss, reason, message string) (ctrl.Result, error) {
@@ -305,14 +327,29 @@ func (r *TadossReconciler) status(ctx context.Context, t *tadossv1.Tadoss, phase
 }
 
 func (r *TadossReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	builder := ctrl.NewControllerManagedBy(mgr).For(&tadossv1.Tadoss{}).
+	terminating := builder.WithPredicates(predicate.NewPredicateFuncs(func(o client.Object) bool { return !o.GetDeletionTimestamp().IsZero() }))
+	b := ctrl.NewControllerManagedBy(mgr).For(&tadossv1.Tadoss{}).
 		Owns(&appsv1.Deployment{}).Owns(&batchv1.Job{}).Owns(&corev1.Service{}).
 		Owns(&networkingv1.Ingress{}).Owns(&policyv1.PodDisruptionBudget{}).
-		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.secretRequests))
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.secretRequests)).
+		WatchesMetadata(&corev1.Namespace{}, handler.EnqueueRequestsFromMapFunc(r.namespaceRequests), terminating)
 	if _, err := mgr.GetRESTMapper().RESTMapping(cnpgv1.SchemeGroupVersion.WithKind("Cluster").GroupKind(), "v1"); err == nil {
-		builder = builder.Owns(&cnpgv1.Cluster{})
+		b = b.Owns(&cnpgv1.Cluster{})
 	}
-	return builder.Complete(r)
+	return b.Complete(r)
+}
+
+// namespaceRequests enqueues every instance in a namespace that started terminating.
+func (r *TadossReconciler) namespaceRequests(ctx context.Context, object client.Object) []reconcile.Request {
+	instances := &tadossv1.TadossList{}
+	if err := r.List(ctx, instances, client.InNamespace(object.GetName())); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(instances.Items))
+	for i := range instances.Items {
+		requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&instances.Items[i])})
+	}
+	return requests
 }
 
 func (r *TadossReconciler) secretRequests(ctx context.Context, object client.Object) []reconcile.Request {

@@ -77,8 +77,8 @@ it never contains credential values. Multiple API replicas get a disruption
 budget and topology spread constraints.
 
 Deletion protection defaults to true. The chart's admission policy rejects
-DELETE until it is explicitly disabled; a finalizer also guards cleanup.
-For deliberate instance removal:
+DELETE until it is explicitly disabled; a finalizer also guards cleanup and
+requeues a blocked deletion every minute. For deliberate instance removal:
 
 ```bash
 kubectl -n tads patch tadoss tadoss --type=merge \
@@ -86,19 +86,33 @@ kubectl -n tads patch tadoss tadoss --type=merge \
 kubectl -n tads delete tadoss tadoss
 ```
 
+The chart value `deletionProtection.enabled` (default `true`) installs the
+policy and its binding, `deletionProtection.namespaceSelector` limits the
+binding to matching namespaces, and `deletionProtection.exemptUsers` lists
+usernames the policy never blocks. Break glass with
+`kubectl delete validatingadmissionpolicybinding tadoss-deletion-protection`;
+the finalizer still requires `deletionProtection: false`.
+
 `deletionPolicy: Retain` (default) detaches the owned CNPG Cluster and preserves
 its database, PVCs and database credentials. API workloads and generated API
 tokens are removed. `Delete` allows Kubernetes garbage collection to remove
 the owned CNPG cluster and its storage. External databases are always retained.
 Retained clusters are not automatically adopted by a replacement instance; use
 their application Secret with `provider: external` to reconnect to retained data.
-Deleting a namespace or Kind cluster removes resources regardless of this
-retention setting. Back up data separately.
+Namespace deletion bypasses both guards: the policy never blocks the namespace
+controller or a request against a terminating namespace, and the operator
+releases the finalizer as soon as the namespace carries a deletion timestamp,
+whatever `deletionProtection` and `deletionPolicy` say. The PostgreSQL cluster
+and its storage are then garbage collected with the namespace even under
+`Retain`. If the operator is not running, the namespace stays `Terminating`
+until the operator returns. Back up data before deleting a namespace or a Kind
+cluster.
 
 ## Tests
 
 `task operator:test` checks profile defaults, workload security, migration
-identity, credential ownership and retention logic. `task operator:e2e:chainsaw`
+identity, credential ownership, retention logic and finalizer release on
+namespace termination. `task operator:e2e:chainsaw`
 uses actual Kubernetes resources, PostgreSQL and API Jobs. It reads the image
 from the deployed instance, so Kind tests require no published release image.
 Failed tests can leave protected resources behind; their temporary namespaces

@@ -1,3 +1,4 @@
+{{- if .Values.deletionProtection.enabled }}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -10,9 +11,19 @@ spec:
         apiVersions: [v1alpha1]
         operations: [DELETE]
         resources: [tadosses]
+  matchConditions:
+    - name: namespace-not-terminating
+      expression: "namespaceObject == null || !has(namespaceObject.metadata.deletionTimestamp)"
+    - name: not-namespace-controller
+      expression: "request.userInfo.username != 'system:serviceaccount:kube-system:namespace-controller'"
+    {{- if .Values.deletionProtection.exemptUsers }}
+    - name: not-exempt-user
+      expression: {{ printf "!(request.userInfo.username in %s)" (toJson .Values.deletionProtection.exemptUsers) | quote }}
+    {{- end }}
   validations:
-    - expression: "!oldObject.spec.deletionProtection"
+    - expression: "has(oldObject.spec.deletionProtection) && oldObject.spec.deletionProtection == false"
       message: "Set spec.deletionProtection=false before deleting a Tadoss instance"
+      reason: Forbidden
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
@@ -21,3 +32,8 @@ metadata:
 spec:
   policyName: tadoss-deletion-protection
   validationActions: [Deny]
+  {{- with .Values.deletionProtection.namespaceSelector }}
+  matchResources:
+    namespaceSelector: {{- toYaml . | nindent 6 }}
+  {{- end }}
+{{- end }}
