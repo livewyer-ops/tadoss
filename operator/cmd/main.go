@@ -8,10 +8,12 @@ import (
 	cnpgv1 "github.com/cloudnative-pg/cloudnative-pg/api/v1"
 	tadossv1 "github.com/livewyer-ops/tadoss/operator/api/v1alpha1"
 	"github.com/livewyer-ops/tadoss/operator/internal/controller"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -32,7 +34,17 @@ func main() {
 	must(clientgoscheme.AddToScheme(scheme))
 	must(tadossv1.AddToScheme(scheme))
 	must(cnpgv1.AddToScheme(scheme))
-	options := ctrl.Options{Scheme: scheme, LeaderElection: leaderElection, LeaderElectionID: "tadoss-operator.tadoss.livewyer.io", HealthProbeBindAddress: probes, Metrics: metricsserver.Options{BindAddress: metrics}}
+	options := ctrl.Options{
+		Scheme:                        scheme,
+		LeaderElection:                leaderElection,
+		LeaderElectionID:              "tadoss-operator.tadoss.livewyer.io",
+		LeaderElectionReleaseOnCancel: true,
+		HealthProbeBindAddress:        probes,
+		Metrics:                       metricsserver.Options{BindAddress: metrics},
+		// Secrets are watched as metadata only and read live, so credential contents never sit in the cache.
+		Cache:  cache.Options{DefaultTransform: cache.TransformStripManagedFields()},
+		Client: client.Options{Cache: &client.CacheOptions{DisableFor: []client.Object{&corev1.Secret{}}}},
+	}
 	if namespaces != "" {
 		options.Cache.DefaultNamespaces = map[string]cache.Config{}
 		for _, namespace := range strings.Split(namespaces, ",") {

@@ -60,7 +60,10 @@ Set `tokenSecret` to a Secret with a `token` key, or omit it to generate a
 cryptographically random token in `<instance>-api-token`. Missing or empty
 credentials keep Ready false. Credential changes trigger API rollouts;
 database URI changes also trigger a new schema Job. Existing Secrets and
-external databases are never adopted or deleted by the operator.
+external databases are never adopted or deleted by the operator. The controller
+reads credential Secrets directly from the API server and keeps only Secret
+metadata in its cache; Secret contents are never cached. On shared clusters set
+the chart value `watchNamespaces` so the cache covers only those namespaces.
 
 ## Reconciliation and deletion
 

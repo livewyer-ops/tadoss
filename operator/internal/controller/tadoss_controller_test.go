@@ -77,3 +77,17 @@ func TestNamespaceRequestsEnqueueInstances(t *testing.T) {
 		t.Fatal("unrelated namespace enqueued instances")
 	}
 }
+
+func TestSecretRequestsAcceptMetadata(t *testing.T) {
+	scheme := testScheme(t)
+	cr := instance()
+	r := &TadossReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(cr).Build(), Scheme: scheme}
+	token := &metav1.PartialObjectMetadata{ObjectMeta: metav1.ObjectMeta{Name: "example-api-token", Namespace: "test"}}
+	if requests := r.secretRequests(context.Background(), token); len(requests) != 1 || requests[0].NamespacedName != client.ObjectKeyFromObject(cr) {
+		t.Fatalf("unexpected requests %v", requests)
+	}
+	unrelated := &metav1.PartialObjectMetadata{ObjectMeta: metav1.ObjectMeta{Name: "unrelated", Namespace: "test"}}
+	if len(r.secretRequests(context.Background(), unrelated)) != 0 {
+		t.Fatal("unrelated Secret enqueued instances")
+	}
+}
