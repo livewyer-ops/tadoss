@@ -1,4 +1,0 @@
-tls:
-  mode: existing
-  issuerName: tadoss-public
-  email: ""

@@ -2,6 +2,10 @@ image:
   repository: livewyer/tadoss-operator
   tag: "0.1.0"
   pullPolicy: IfNotPresent
+# The CRD is a chart template with helm.sh/resource-policy: keep, so upgrades update it and
+# uninstall retains it. Set install to false when another release owns the CRD.
+crds:
+  install: true
 replicas: 1
 watchNamespaces: []
 resources:

@@ -1,8 +1,10 @@
 name: Check
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
+  workflow_call:
 permissions:
   contents: read
 concurrency:
@@ -12,28 +14,26 @@ jobs:
   check:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    services:
-      postgres:
-        image: postgres:18.4
-        env:
-          POSTGRES_USER: tadoss
-          POSTGRES_PASSWORD: tadoss
-          POSTGRES_DB: tadoss
-        ports: [15432:5432]
-        options: >-
-          --health-cmd "pg_isready -U tadoss -d tadoss"
-          --health-interval 2s --health-timeout 3s --health-retries 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: aquaproj/aqua-installer@11dd79b4e498d471a9385aa9fb7f62bb5f52a73c # v4.0.4
+      - uses: ./.github/actions/setup
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          aqua_version: v2.56.3
-          aqua_opts: "-l"
-      - run: uv sync --frozen --python 3.12
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ runner.os }}-${{ hashFiles('operator/go.sum') }}
+      - run: task setup
       - run: task check
-      - run: |
+      - name: Generated files are current
+        run: |
           task operator:generate
-          git diff --exit-code -- operator/api operator/config deploy/charts/tadoss-operator
+          git add -A -- operator/api operator/config deploy/charts/tadoss-operator
+          git diff --cached --exit-code --stat
   kind:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
@@ -43,15 +43,12 @@ jobs:
         profile: [local-kind, multi-server]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: aquaproj/aqua-installer@11dd79b4e498d471a9385aa9fb7f62bb5f52a73c # v4.0.4
-        with:
-          aqua_version: v2.56.3
-          aqua_opts: "-l"
+      - uses: ./.github/actions/setup
       - run: task kind:test PROFILE=${{ matrix.profile }}
       - name: Capture diagnostics
         if: failure()
         env:
-          KUBECONFIG: .local/tadoss.kubeconfig
+          KUBECONFIG: ${{ github.workspace }}/.local/tadoss.kubeconfig
         run: |
           mkdir -p reports
           kubectl get nodes,pods,deployments,jobs,tadosses,clusters.postgresql.cnpg.io -A -o wide > reports/resources.txt || true
@@ -64,5 +61,3 @@ jobs:
           name: kind-${{ matrix.profile }}
           path: reports/
           if-no-files-found: warn
-      - run: task kind:down
-        if: always()

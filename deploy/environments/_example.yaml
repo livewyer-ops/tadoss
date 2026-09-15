@@ -1,0 +1,23 @@
+# Template for a real cluster. Copy it with `task env:init NAME=<name> DOMAIN=<host>`, which
+# writes deploy/environments/<name>.yaml with the host filled in. Every value merges over
+# deploy/values/defaults.yaml. Files whose names start with an underscore are not environments.
+tls:
+  mode: acme
+  acme:
+    # Required for ACME.
+    email: ""
+    # Switch to production once the staging certificate issues.
+    server: staging
+images:
+  api: livewyer/tadoss-api
+  operator: livewyer/tadoss-operator
+  # A published tag or digest, never a dev-* tag.
+  tag: "0.1.0"
+instance:
+  namespace: tads
+  spec:
+    profile: multi-server
+    database:
+      storage: 20Gi
+    ingress:
+      host: data.example.com

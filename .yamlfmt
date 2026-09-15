@@ -1,0 +1,13 @@
+# Generated files and Go-templated Helm files are excluded.
+doublestar: true
+exclude:
+  - .local/**
+  - .venv/**
+  - reports/**
+  - operator/config/**
+  - operator/test/chainsaw/**
+  - deploy/charts/*/templates/**
+formatter:
+  type: basic
+  retain_line_breaks_single: true
+  max_line_length: 0

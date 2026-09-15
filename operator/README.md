@@ -7,15 +7,17 @@ For direct installation, install CloudNativePG first if using managed databases.
 Use an API and operator image built from the same revision:
 
 ```bash
-kubectl apply --server-side -f deploy/charts/tadoss-operator/crds
 helm upgrade --install tadoss-operator deploy/charts/tadoss-operator \
   --namespace tadoss-system --create-namespace \
   --set image.repository=YOUR_REGISTRY/tadoss-operator --set image.tag=YOUR_TAG --wait
+kubectl create namespace tads
+kubectl apply --server-side -k deploy/instances/base
 ```
 
-Run these commands from the repository root. Helm installs CRDs initially but
-does not upgrade them, hence the separate apply step. Installing the chart
-requires cluster-level permissions for CRDs, RBAC and the native Kubernetes
+Run these commands from the repository root. The CRD is a chart template annotated
+`helm.sh/resource-policy: keep`, so `helm upgrade` upgrades it and `helm uninstall`
+leaves it in place; set `crds.install=false` when another release owns it. Installing
+the chart requires cluster-level permissions for CRDs, RBAC and the native Kubernetes
 ValidatingAdmissionPolicy. No custom admission webhook server is required.
 
 ```yaml

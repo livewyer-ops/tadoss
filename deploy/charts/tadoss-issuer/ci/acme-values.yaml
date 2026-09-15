@@ -1,0 +1,5 @@
+name: tadoss-acme
+mode: acme
+acme:
+  email: ops@example.com
+  server: staging

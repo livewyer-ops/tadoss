@@ -1,0 +1,12 @@
+# Name of the ClusterIssuer.
+name: tadoss-selfsigned
+# selfSigned or acme.
+mode: selfSigned
+acme:
+  # Required for ACME.
+  email: ""
+  # production, staging or an ACME directory URL. Use staging while setting up a new
+  # environment; the production directory has tight rate limits.
+  server: production
+  # Ingress class that serves HTTP-01 challenges.
+  ingressClassName: traefik

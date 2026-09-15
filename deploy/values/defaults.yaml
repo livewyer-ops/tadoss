@@ -1,0 +1,63 @@
+# Defaults for every environment. An environment file under deploy/environments merges over
+# these values; the Task variables for Kind add instance.spec.profile and images.tag on top.
+platform:
+  timeoutSeconds: 600
+  # enabled: false leaves the component out of the rendered state. A release of the same
+  # name that something else installed is neither adopted nor removed.
+  cnpg:
+    enabled: true
+    values:
+      fullnameOverride: cnpg-controller-manager
+      crds:
+        create: true
+  traefik:
+    enabled: true
+    values:
+      deployment:
+        replicas: 1
+      ingressClass:
+        enabled: true
+        name: traefik
+      service:
+        type: LoadBalancer
+  certManager:
+    enabled: true
+    values:
+      crds:
+        enabled: true
+tls:
+  # existing: bring your own ClusterIssuer or TLS Secret and set instance.spec.ingress accordingly.
+  # selfSigned or acme: the tadoss-issuer chart creates a ClusterIssuer named tls.issuerName,
+  # which defaults to tadoss-<mode>, and the instance uses it.
+  mode: existing
+  issuerName: ""
+  acme:
+    email: ""
+    # production, staging or an ACME directory URL.
+    server: production
+    ingressClassName: traefik
+operator:
+  namespace: tadoss-system
+  # Passed verbatim to the tadoss-operator chart.
+  values: {}
+images:
+  api: livewyer/tadoss-api
+  operator: livewyer/tadoss-operator
+  tag: "0.1.0"
+instance:
+  enabled: true
+  namespace: tads
+  # Becomes Tadoss.spec verbatim, plus image from images.* and a default clusterIssuer.
+  spec:
+    profile: local-kind
+    database:
+      provider: managed
+      storage: 5Gi
+    deletionProtection: true
+    deletionPolicy: Retain
+    ingress:
+      # Empty means no Ingress; the API is reachable through its Service only.
+      host: ""
+      className: traefik
+      tlsSecretName: tadoss-tls
+      clusterIssuer: ""

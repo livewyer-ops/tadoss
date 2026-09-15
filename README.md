@@ -17,16 +17,19 @@ Install Docker and [aqua](https://aquaproj.github.io/docs/install/), then:
 
 ```bash
 aqua install
+task setup
 task kind:up
 export KUBECONFIG="$PWD/.local/tadoss.kubeconfig"
 kubectl -n tads get tadoss,pods
 ```
 
-This builds both images locally and loads them into the `tadoss` Kind cluster.
-Helmfile installs CloudNativePG, Traefik and cert-manager. The operator chart
-installs the CRD, controller and native deletion admission policy. A `Tadoss`
-resource then provisions PostgreSQL, an isolated schema migration Job, the API,
-its generated bearer-token Secret, Service and TLS ingress.
+`task setup` creates the Python environment and installs the pinned helm-diff plugin
+into `.local/helm/plugins`. `task kind:up` builds both images, tags them with a hash of
+their sources, loads them into the `tadoss` Kind cluster and runs helmfile: CloudNativePG,
+Traefik, cert-manager, a self-signed ClusterIssuer, the operator chart (CRD, controller and
+native deletion admission policy) and a `Tadoss` resource. The operator then provisions
+PostgreSQL, an isolated schema migration Job, the API, its generated bearer-token Secret,
+Service and TLS ingress.
 
 Open <https://api.tadoss.localtest.me:18443/docs>. The local certificate is
 self-signed. HTTP uses port 18080; both ports bind only to loopback. The hostname
@@ -45,11 +48,15 @@ reference without contacting the media store.
 
 ```bash
 task operator:e2e:chainsaw  # Test the running cluster
-task kind:test             # Build, deploy and test
+task kind:test             # Build, deploy, confirm idempotence and test
 task kind:down             # Delete this disposable cluster, including its data
 ```
 
 ## Profiles and environments
+
+A profile sizes an instance: it is the `spec.profile` value of the `Tadoss` resource. An
+environment is a cluster: a file in `deploy/environments` whose values merge over
+`deploy/values/defaults.yaml`.
 
 | Profile | API replicas | Managed PostgreSQL instances | Kind nodes |
 | --- | ---: | ---: | ---: |
@@ -61,34 +68,39 @@ task kind:down             # Delete this disposable cluster, including its data
 Select a profile with `task kind:up PROFILE=multi-server`. A pre-existing
 single-node cluster cannot become a four-node cluster in place: remove only
 that disposable cluster with `task kind:down` first. Built-in Kind configurations
-share host ports, so run one at a time. Kind validates deployment behavior;
+share host ports, so run one at a time. Kind validates deployment behaviour;
 its nodes still share one physical host.
 
 For an existing Kubernetes cluster (1.32+, a default StorageClass required for
-managed PostgreSQL), create an environment:
+managed PostgreSQL), create an environment from the template:
 
 ```bash
-task env:init NAME=production PROFILE=multi-server DOMAIN=data.example.com
+task env:init NAME=production DOMAIN=data.example.com
 ```
 
-Build and publish the API and operator images to your registry. No release
-images are published by this repository yet. Set `image.repository` and
-`image.tag` in `deploy/environments/production/operator-values.yaml`, and set
-`spec.image` in that environment's `tadoss-patch.yaml`. Set `tls.email` in
-`platform-values.yaml` for ACME. Point the domain at Traefik's external address
-and make ports 80 and 443 reachable. Apply with the intended kubeconfig:
+Edit `deploy/environments/production.yaml`. Set `tls.acme.email`, and set `images.tag`
+to API and operator images published to your registry; this repository publishes no
+release images yet. `tls.acme.server` starts on the Let's Encrypt staging directory;
+switch it to `production` once a certificate issues. Point the domain at Traefik's
+external address and make ports 80 and 443 reachable. Preview, apply and wait with the
+intended kubeconfig:
 
 ```bash
+task env:diff ENV=production KUBECONFIG=/path/to/cluster.kubeconfig
 task env:apply ENV=production KUBECONFIG=/path/to/cluster.kubeconfig
+task env:wait ENV=production KUBECONFIG=/path/to/cluster.kubeconfig
 task env:summary ENV=production KUBECONFIG=/path/to/cluster.kubeconfig
 ```
 
-Environment files compose the instance profiles in `deploy/instances`.
-Platform values can disable an already-installed CNPG controller, Traefik or
-cert-manager. Use `tls.mode: existing` when supplying your own TLS issuer or
-Secret. Platform controllers are cluster-wide; review values before applying
-into a shared cluster. See [operator usage](operator/README.md) for existing
-databases, credentials, retention and direct Helm installation.
+`platform.cnpg.enabled`, `platform.traefik.enabled` and `platform.certManager.enabled`
+leave a component out when the cluster already runs it; a release that something else
+installed is neither adopted nor removed. Use `tls.mode: existing` with your own
+ClusterIssuer or TLS Secret and set `instance.spec.ingress` to match. Platform
+controllers are cluster-wide; review values before applying into a shared cluster.
+Removing the instance release is denied while `deletionProtection` is true. See
+[operator usage](operator/README.md) for existing databases, credentials, retention and
+direct Helm installation, and the [decision records](docs/decisions/README.md) for the
+reasoning behind this layout.
 
 ## Local development
 
@@ -187,16 +199,24 @@ reference and deleting a referenced schema are rejected.
 ## Checks
 
 ```bash
-task deps                  # Local PostgreSQL required for API tests
-task check                 # Python lint/tests, Go tests, Helm lint, manifest checks
-task operator:generate     # Regenerate CRD, deepcopy code and chart RBAC
+task check                 # Lint and test everything; starts PostgreSQL with Compose
+task fmt                   # Format Python, Go and YAML
+task operator:generate     # Regenerate CRD, deepcopy code, chart CRD template and RBAC
 task kind:test             # Live Kubernetes integration suite
 ```
 
+`task check` runs ruff, the API tests, `go vet` and the operator tests with the race
+detector, `helm lint` for both charts including the ACME branch, kubeconform over every
+rendered manifest (the `Tadoss` resource is validated against a schema generated from its
+CRD), Chainsaw lint, yamlfmt and actionlint.
+
 Chainsaw checks provisioning, real API writes, persistence after pod replacement,
 drift correction, deletion protection, database retention, external PostgreSQL,
-missing credentials and token rotation. JUnit reports are written to `reports/`.
-CI runs these tests on both the one-node and four-node Kind profiles.
+missing credentials and token rotation. JUnit reports are written to
+`reports/<profile>/operator-chainsaw.xml`. CI runs these tests on both the one-node
+and four-node Kind profiles, with caches for aqua, uv, Go and Helm plugins; Renovate
+keeps the pinned tools, charts, images and actions current. Tags matching `v*` build
+multi-arch images, scan, sign and publish them with the packaged charts.
 
 The bundled upstream contract is pinned to
 [`d2b90e52`](https://github.com/bbc/tads/commit/d2b90e52d54db947f4c8ddab571538ed18ab3052).

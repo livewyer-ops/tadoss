@@ -14,3 +14,4 @@ data/
 reports/
 operator/bin/
 *.kubeconfig
+.task/

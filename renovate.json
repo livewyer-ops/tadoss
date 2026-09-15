@@ -1,0 +1,35 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests",
+    "github>aquaproj/aqua-renovate-config#2.13.0"
+  ],
+  "minimumReleaseAge": "7 days",
+  "packageRules": [
+    {
+      "matchManagers": ["helmfile"],
+      "groupName": "helm charts"
+    },
+    {
+      "matchManagers": ["pep621", "gomod", "github-actions", "dockerfile", "docker-compose"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "minor and patch"
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^deploy/kind/.+\\.ya?ml$/"],
+      "matchStrings": ["image: (?<depName>kindest/node):(?<currentValue>v[0-9.]+)@(?<currentDigest>sha256:[a-f0-9]+)"],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^Taskfile\\.yaml$/"],
+      "matchStrings": ["HELM_DIFF_VERSION: (?<currentValue>v[0-9.]+)"],
+      "depNameTemplate": "databus23/helm-diff",
+      "datasourceTemplate": "github-releases"
+    }
+  ]
+}

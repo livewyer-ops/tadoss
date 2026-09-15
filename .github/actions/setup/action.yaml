@@ -1,0 +1,19 @@
+name: Set up toolchain
+description: Install the aqua-managed tools and the pinned helm-diff plugin, with caches
+runs:
+  using: composite
+  steps:
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.local/share/aquaproj-aqua
+        key: aqua-${{ runner.os }}-${{ hashFiles('aqua.yml') }}
+    - uses: aquaproj/aqua-installer@11dd79b4e498d471a9385aa9fb7f62bb5f52a73c # v4.0.4
+      with:
+        aqua_version: v2.56.3
+        aqua_opts: "-l"
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: .local/helm/plugins
+        key: helm-plugins-${{ runner.os }}-${{ hashFiles('Taskfile.yaml') }}
+    - shell: bash
+      run: task tools:helm-diff
