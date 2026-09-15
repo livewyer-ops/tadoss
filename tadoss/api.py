@@ -181,7 +181,7 @@ def page_response(request, records, options, event_listing=False):
     return JSONResponse(page, headers=headers)
 
 
-def dispatch(request, database, body):
+def dispatch(request, pool, body):
     path = request.scope["route"].path
     method = "get" if request.method == "HEAD" else request.method.lower()
     options = query_options(request, path, method)
@@ -205,7 +205,7 @@ def dispatch(request, database, body):
         raise APIError(
             404, "Deletion request not found; deletions complete synchronously"
         )
-    with store.transaction(database, write=method in {"put", "post", "delete"}) as db:
+    with store.transaction(pool, write=method in {"put", "post", "delete"}) as db:
         collection = path.split("/")[1]
         identifier = request.path_params.get(
             "track_id", request.path_params.get("schema_id")
@@ -311,14 +311,28 @@ def create_app(database=None, token=None, dev=None):
     if not token:
         logger.warning("Authentication disabled: development mode without a token")
     auto_migrate = env_flag("TADOSS_AUTO_MIGRATE", True)
+    pool = store.create_pool(
+        database,
+        min_size=int(os.getenv("TADOSS_POOL_MIN_SIZE", "1")),
+        max_size=int(os.getenv("TADOSS_POOL_MAX_SIZE", "10")),
+        timeout=float(os.getenv("TADOSS_POOL_TIMEOUT", "30")),
+    )
 
     @asynccontextmanager
     async def lifespan(app):
-        if auto_migrate:
-            await run_in_threadpool(store.initialize, database)
-        yield
+        # Connections are established in the background; a request waits up to the
+        # pool timeout for one, so a slow database delays readiness instead of
+        # crashing the process.
+        pool.open(wait=False)
+        try:
+            if auto_migrate:
+                await run_in_threadpool(store.initialize, pool)
+            yield
+        finally:
+            pool.close()
 
     app = FastAPI(title="TADOSS", version=__version__, lifespan=lifespan)
+    app.state.pool = pool
 
     @app.exception_handler(APIError)
     async def api_error(request, exc):
@@ -360,8 +374,17 @@ def create_app(database=None, token=None, dev=None):
 
     @app.get("/readyz", include_in_schema=False)
     def ready():
-        with store.transaction(database) as db:
-            store.check_schema(db)
+        try:
+            with store.transaction(pool, timeout=2) as db:
+                store.check_schema(db)
+        except psycopg.OperationalError:
+            return JSONResponse(
+                {"status": "not ready", "reason": "database"}, status_code=503
+            )
+        except RuntimeError:
+            return JSONResponse(
+                {"status": "not ready", "reason": "schema"}, status_code=503
+            )
         return {"status": "ready"}
 
     async def endpoint(request: Request):
@@ -395,7 +418,7 @@ def create_app(database=None, token=None, dev=None):
                 )
             except (ValueError, UnicodeError, RecursionError) as exc:
                 raise APIError(400, "Request body must be valid JSON") from exc
-        response = await run_in_threadpool(dispatch, request, database, body)
+        response = await run_in_threadpool(dispatch, request, pool, body)
         if request.method == "HEAD":
             response.body = b""
         return response

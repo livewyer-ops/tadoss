@@ -166,6 +166,9 @@ list as a query parameter; the HTTP client then encodes the parameter itself.
 | `TADOSS_DATABASE` | Unset | PostgreSQL connection URI; required unless `TADOSS_DEV=true`, which defaults to `postgresql://tadoss:tadoss@127.0.0.1:15432/tadoss` |
 | `TADOSS_AUTO_MIGRATE` | `true` | Initialise the schema on startup; the operator disables this and uses a Job |
 | `TADOSS_STATEMENT_TIMEOUT` | `30s` | PostgreSQL `statement_timeout` for every API transaction |
+| `TADOSS_POOL_MIN_SIZE` | `1` | Connections each replica keeps open |
+| `TADOSS_POOL_MAX_SIZE` | `10` | Connections each replica may open; keep replicas times this below PostgreSQL `max_connections` |
+| `TADOSS_POOL_TIMEOUT` | `30` | Seconds a request waits for a pooled connection before returning 503 |
 | `TADOSS_HOST` | `127.0.0.1` | Listen address; container uses `0.0.0.0` |
 | `TADOSS_PORT` | `8000` | HTTP port |
 
@@ -173,7 +176,9 @@ list as a query parameter; the HTTP client then encodes the parameter itself.
 `no` or `off`; any other value fails startup.
 `python -m tadoss migrate` initialises or checks the database schema. Kubernetes
 API rollouts wait for that Job to succeed. `/readyz` checks database connectivity
-and schema compatibility; `/healthz` checks the process.
+and schema compatibility; `/healthz` checks the process. Connections are pooled per
+replica and established in the background, so a slow database delays readiness rather
+than restarting the process.
 
 The shared token grants access to the whole store. URL tokens are accepted for
 TADS compatibility; prefer the Authorization header. `Link` headers omit `access_token`,
@@ -183,7 +188,8 @@ public. OIDC, per-resource permissions and HTTP Basic are not implemented.
 
 Writes are limited to 1 MiB per request and 1,000 events per batch. Pages default
 to 100 items and cap at 1,000. PostgreSQL transactions permit multiple API
-replicas; a database advisory lock currently serialises all writes. Statements time out after
+replicas, each holding a pool of connections; a database advisory lock currently
+serialises all writes. Statements time out after
 30 s and return 503. Listings
 and overlap checks scan records in memory. Offset pagination can shift under
 concurrent edits. Indexed range queries and finer locks are needed for higher

@@ -2,8 +2,8 @@ import os
 from contextlib import contextmanager
 from uuid import uuid4
 
-import psycopg
 from psycopg.types.json import Jsonb
+from psycopg_pool import ConnectionPool
 
 from .validation import (
     APIError,
@@ -41,8 +41,20 @@ CREATE INDEX IF NOT EXISTS events_track ON events(track_id);
 """
 
 
-def initialize(database):
-    with transaction(database, write=True) as db:
+def create_pool(database, min_size=1, max_size=10, timeout=30.0):
+    return ConnectionPool(
+        database,
+        min_size=min_size,
+        max_size=max_size,
+        timeout=timeout,
+        open=False,
+        kwargs={"connect_timeout": 10},
+        name="tadoss",
+    )
+
+
+def initialize(pool):
+    with transaction(pool, write=True) as db:
         db.execute(DDL)
         db.execute(
             "INSERT INTO tadoss_version VALUES (%s) ON CONFLICT DO NOTHING",
@@ -58,11 +70,8 @@ def check_schema(db):
 
 
 @contextmanager
-def transaction(database, write=False):
-    with (
-        psycopg.connect(database, connect_timeout=10) as connection,
-        connection.cursor() as db,
-    ):
+def transaction(pool, write=False, timeout=None):
+    with pool.connection(timeout=timeout) as connection, connection.cursor() as db:
         if write:
             db.execute("SET LOCAL lock_timeout = '10s'")
         else:

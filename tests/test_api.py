@@ -419,6 +419,23 @@ class StoreTests(unittest.TestCase):
         self.assertEqual([record["id"] for record in remaining], [kept_id])
         self.assertNotIn("track_id", remaining[0])
 
+    def test_pool_exhaustion_returns_503(self):
+        settings = {"TADOSS_POOL_MAX_SIZE": "1", "TADOSS_POOL_TIMEOUT": "0.5"}
+        with patch.dict(os.environ, settings):
+            app = create_app(self.database, token="test-secret")
+        with TestClient(app) as client:
+            held = app.state.pool.getconn()
+            try:
+                response = client.get(
+                    "/tracks", headers={"Authorization": "Bearer test-secret"}
+                )
+            finally:
+                app.state.pool.putconn(held)
+            self.assertEqual(response.status_code, 503)
+            self.assertIn("Retry-After", response.headers)
+            validate(response.json(), contract_schema("error"))
+            self.assertEqual(client.get("/readyz").status_code, 200)
+
     def test_schema_timestamps(self):
         sid = str(uuid4())
         self.send("PUT", f"/schemas/{sid}", {"id": sid, "schema": {}}, status=201)
@@ -461,7 +478,8 @@ class ConfigTests(unittest.TestCase):
                 env_flag("TADOSS_FLAG", True)
 
     def test_discovery_without_database(self):
-        with patch.dict(os.environ, {"TADOSS_AUTO_MIGRATE": "false"}):
+        settings = {"TADOSS_AUTO_MIGRATE": "false", "TADOSS_POOL_TIMEOUT": "0.5"}
+        with patch.dict(os.environ, settings):
             app = create_app("postgresql://x@127.0.0.1:1/x", token="t")
         headers = {"Authorization": "Bearer t"}
         with TestClient(app) as client:
