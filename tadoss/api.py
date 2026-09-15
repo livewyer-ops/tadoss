@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import os
+import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -13,12 +14,13 @@ from functools import partial
 from urllib.parse import unquote
 
 import psycopg
+from asgi_correlation_id import CorrelationIdMiddleware
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
-from . import __version__, store
+from . import __version__, store, telemetry
 from .validation import (
     SPEC,
     APIError,
@@ -30,7 +32,50 @@ from .validation import (
 )
 
 MAX_BODY = 1024 * 1024
+PROBES = {"/healthz", "/readyz"}
 logger = logging.getLogger("tadoss")
+access_logger = logging.getLogger("tadoss.access")
+
+
+class AccessLog:
+    """Logs method, route template, status and duration; never the query string."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        started = time.perf_counter()
+        status = 500
+
+        async def record(message):
+            nonlocal status
+            if message["type"] == "http.response.start":
+                status = message["status"]
+            await send(message)
+
+        try:
+            await self.app(scope, receive, record)
+        finally:
+            route = scope.get("route")
+            template = route.path if route is not None else scope["path"]
+            client = scope.get("client")
+            access_logger.log(
+                logging.DEBUG if scope["path"] in PROBES else logging.INFO,
+                "%s %s %s",
+                scope["method"],
+                template,
+                status,
+                extra={
+                    "method": scope["method"],
+                    "route": template,
+                    "status": status,
+                    "duration_ms": round((time.perf_counter() - started) * 1000, 1),
+                    "client": client[0] if client else None,
+                },
+            )
 
 
 def env_flag(name, default):
@@ -486,6 +531,9 @@ def create_app(database=None, token=None, dev=None):
 
     app = FastAPI(title="TADOSS", version=__version__, lifespan=lifespan)
     app.state.pool = pool
+    app.add_middleware(AccessLog)
+    app.add_middleware(CorrelationIdMiddleware, header_name="X-Request-ID")
+    telemetry.instrument(app)
 
     @app.exception_handler(APIError)
     async def api_error(request, exc):

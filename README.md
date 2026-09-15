@@ -172,6 +172,9 @@ list as a query parameter; the HTTP client then encodes the parameter itself.
 | `TADOSS_POOL_MAX_SIZE` | `10` | Connections each replica may open; keep replicas times this below PostgreSQL `max_connections` |
 | `TADOSS_POOL_TIMEOUT` | `30` | Seconds a request waits for a pooled connection before returning 503 |
 | `TADOSS_MIGRATE_TIMEOUT` | `300` | Seconds `tadoss migrate` waits for the database before failing |
+| `TADOSS_LOG_LEVEL` | `info` | Log level for every logger |
+| `TADOSS_LOG_FORMAT` | `json` | `json` or `text` log lines on stdout |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Unset | Enables OpenTelemetry traces and metrics over OTLP/HTTP |
 | `TADOSS_HOST` | `127.0.0.1` | Listen address; container uses `0.0.0.0` |
 | `TADOSS_PORT` | `8000` | HTTP port |
 
@@ -188,8 +191,12 @@ than restarting the process.
 
 The shared token grants access to the whole store. URL tokens are accepted for
 TADS compatibility; prefer the Authorization header. `Link` headers omit `access_token`,
-so clients using URL tokens must add it to every request. API access logging is
-disabled to keep URL tokens out of logs. Health probes and documentation are
+so clients using URL tokens must add it to every request. The access log records the
+method, route template, status, duration and request id, never the query string, so
+URL tokens stay out of logs. Every response carries `X-Request-ID`; a UUID supplied by
+the client is echoed, anything else is replaced. With `OTEL_EXPORTER_OTLP_ENDPOINT`
+set, requests and database statements are traced and HTTP metrics exported through
+OpenTelemetry; spans record paths without query strings. Health probes and documentation are
 public. OIDC, per-resource permissions and HTTP Basic are not implemented.
 
 Writes are limited to 1 MiB per request and 1,000 events per batch. Pages default

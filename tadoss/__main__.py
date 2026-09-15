@@ -3,6 +3,8 @@ import os
 
 import uvicorn
 
+from .telemetry import configure_logging
+
 
 def main():
     parser = argparse.ArgumentParser(description="TADOSS service and schema management")
@@ -10,6 +12,7 @@ def main():
         "command", nargs="?", choices=["serve", "migrate"], default="serve"
     )
     args = parser.parse_args()
+    configure_logging()
     if args.command == "migrate":
         from .api import env_flag
         from .store import DEFAULT_DATABASE, create_pool, initialize
@@ -29,6 +32,7 @@ def main():
         factory=True,
         host=os.getenv("TADOSS_HOST", "127.0.0.1"),
         port=int(os.getenv("TADOSS_PORT", "8000")),
+        log_config=None,
         access_log=False,  # TADS permits query-string credentials.
         proxy_headers=False,
     )

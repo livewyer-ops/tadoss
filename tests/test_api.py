@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from unittest.mock import patch
 from urllib.parse import quote
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import psycopg
 from fastapi.testclient import TestClient
@@ -448,6 +448,31 @@ class StoreTests(unittest.TestCase):
             self.assertIn("Retry-After", response.headers)
             validate(response.json(), contract_schema("error"))
             self.assertEqual(client.get("/readyz").status_code, 200)
+
+    def test_access_log_and_request_id(self):
+        with self.assertLogs("tadoss.access", "INFO") as logs:
+            response = self.send(
+                "GET",
+                self.events,
+                headers={"Authorization": ""},
+                params={"access_token": "test-secret"},
+            )
+        line = logs.output[-1]
+        self.assertIn("GET /tracks/{track_id}/events 200", line)
+        self.assertNotIn("access_token", line)
+        self.assertNotIn("test-secret", line)
+        self.assertTrue(UUID(response.headers["X-Request-ID"]))
+        supplied = str(uuid4())
+        echoed = self.send("GET", "/service", headers={"X-Request-ID": supplied})
+        self.assertEqual(echoed.headers["X-Request-ID"], supplied)
+        replaced = self.send("GET", "/service", headers={"X-Request-ID": "not a uuid"})
+        self.assertNotEqual(replaced.headers["X-Request-ID"], "not a uuid")
+        with patch.dict(
+            os.environ, {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:1"}
+        ):
+            app = create_app(self.database, token="test-secret")
+        with TestClient(app) as client:
+            self.assertEqual(client.get("/healthz").status_code, 200)
 
     def test_schema_timestamps(self):
         sid = str(uuid4())

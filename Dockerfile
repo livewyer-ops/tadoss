@@ -8,10 +8,10 @@ ENV UV_COMPILE_BYTECODE=1 \
     PATH="/app/.venv/bin:$PATH" \
     TADOSS_HOST=0.0.0.0
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --no-install-project --python /usr/local/bin/python
+RUN uv sync --frozen --no-dev --no-install-project --extra otel --python /usr/local/bin/python
 COPY README.md LICENSE NOTICE ./
 COPY tadoss ./tadoss
-RUN uv sync --frozen --no-dev --python /usr/local/bin/python
+RUN uv sync --frozen --no-dev --extra otel --python /usr/local/bin/python
 USER 10001:10001
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s \
