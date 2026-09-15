@@ -162,24 +162,29 @@ list as a query parameter; the HTTP client then encodes the parameter itself.
 | Environment variable | Default | Purpose |
 | --- | --- | --- |
 | `TADOSS_TOKEN` | Unset | Shared bearer token; required unless development mode is explicit |
-| `TADOSS_DEV` | `false` | Allows unauthenticated local use when no token is set |
-| `TADOSS_DATABASE` | `postgresql://tadoss:tadoss@127.0.0.1:15432/tadoss` | PostgreSQL connection URI |
-| `TADOSS_AUTO_MIGRATE` | `true` | Initialize schema on startup; the operator disables this and uses a Job |
+| `TADOSS_DEV` | `false` | Allows unauthenticated local use when no token is set, and selects the Compose database when `TADOSS_DATABASE` is unset |
+| `TADOSS_DATABASE` | Unset | PostgreSQL connection URI; required unless `TADOSS_DEV=true`, which defaults to `postgresql://tadoss:tadoss@127.0.0.1:15432/tadoss` |
+| `TADOSS_AUTO_MIGRATE` | `true` | Initialise the schema on startup; the operator disables this and uses a Job |
+| `TADOSS_STATEMENT_TIMEOUT` | `30s` | PostgreSQL `statement_timeout` for every API transaction |
 | `TADOSS_HOST` | `127.0.0.1` | Listen address; container uses `0.0.0.0` |
 | `TADOSS_PORT` | `8000` | HTTP port |
 
-`python -m tadoss migrate` initializes or checks the database schema. Kubernetes
+`TADOSS_DEV` and `TADOSS_AUTO_MIGRATE` accept `1`, `true`, `yes` or `on` and `0`, `false`,
+`no` or `off`; any other value fails startup.
+`python -m tadoss migrate` initialises or checks the database schema. Kubernetes
 API rollouts wait for that Job to succeed. `/readyz` checks database connectivity
 and schema compatibility; `/healthz` checks the process.
 
 The shared token grants access to the whole store. URL tokens are accepted for
-TADS compatibility; prefer the Authorization header. API access logging is
+TADS compatibility; prefer the Authorization header. `Link` headers omit `access_token`,
+so clients using URL tokens must add it to every request. API access logging is
 disabled to keep URL tokens out of logs. Health probes and documentation are
 public. OIDC, per-resource permissions and HTTP Basic are not implemented.
 
 Writes are limited to 1 MiB per request and 1,000 events per batch. Pages default
 to 100 items and cap at 1,000. PostgreSQL transactions permit multiple API
-replicas; a database advisory lock currently serializes all writes. Listings
+replicas; a database advisory lock currently serialises all writes. Statements time out after
+30 s and return 503. Listings
 and overlap checks scan records in memory. Offset pagination can shift under
 concurrent edits. Indexed range queries and finer locks are needed for higher
 throughput. The operator does not configure database backups: configure and

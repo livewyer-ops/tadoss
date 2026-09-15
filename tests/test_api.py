@@ -3,14 +3,16 @@ import json
 import os
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
 from urllib.parse import quote
 from uuid import uuid4
 
+import psycopg
 from fastapi.testclient import TestClient
 from psycopg import connect, sql
 from psycopg.conninfo import make_conninfo
 
-from tadoss.api import create_app
+from tadoss.api import create_app, env_flag
 from tadoss.store import DEFAULT_DATABASE
 from tadoss.validation import SPEC, contract_schema, validate
 
@@ -378,6 +380,105 @@ class StoreTests(unittest.TestCase):
                     walk(child)
 
         walk(json.loads(json.dumps(SPEC)))
+
+    def test_link_header_omits_url_token(self):
+        self.send("POST", self.events, [event("[0:0_1:0)"), event("[1:0_2:0)")])
+        first = self.send(
+            "GET",
+            self.events,
+            headers={"Authorization": ""},
+            params={"access_token": "test-secret", "limit": 1},
+        )
+        link = first.headers["Link"]
+        self.assertNotIn("access_token", link)
+        self.assertNotIn("test-secret", link)
+        second = self.send("GET", link.split(">", 1)[0][1:])
+        self.assertEqual(len(second.json()), 1)
+        for record in first.json() + second.json():
+            self.assertNotIn("track_id", record)
+
+    def test_database_errors_are_tads_errors(self):
+        with (
+            patch("tadoss.store.listing", side_effect=psycopg.ProgrammingError("x")),
+            self.assertLogs("tadoss", "ERROR"),
+        ):
+            response = TestClient(self.app, raise_server_exceptions=False).get(
+                "/tracks", headers={"Authorization": "Bearer test-secret"}
+            )
+        self.assertEqual(response.status_code, 500)
+        validate(response.json(), contract_schema("error"))
+
+    def test_delete_is_scoped_to_track(self):
+        other = str(uuid4())
+        self.send("PUT", f"/tracks/{other}", {**self.track, "id": other}, status=201)
+        kept = self.send("POST", f"/tracks/{other}/events", event()).json()
+        kept_id = kept["responses"][0]["id"]
+        self.send("POST", self.events, event())
+        self.send("DELETE", self.events, params={"ids": kept_id}, status=204)
+        remaining = self.send("GET", f"/tracks/{other}/events").json()
+        self.assertEqual([record["id"] for record in remaining], [kept_id])
+        self.assertNotIn("track_id", remaining[0])
+
+    def test_schema_timestamps(self):
+        sid = str(uuid4())
+        self.send("PUT", f"/schemas/{sid}", {"id": sid, "schema": {}}, status=201)
+        schema = self.send("GET", f"/schemas/{sid}").json()
+        self.assertEqual(schema["created"], schema["updated"])
+
+    def test_dev_mode_gate(self):
+        with self.assertLogs("tadoss", "WARNING"):
+            app = create_app(self.database, token="", dev=True)
+        with TestClient(app) as client:
+            self.assertEqual(client.get("/tracks").status_code, 200)
+        with self.assertRaises(RuntimeError):
+            create_app(self.database, token="", dev=False)
+        with patch.dict(os.environ), self.assertRaises(RuntimeError):
+            os.environ.pop("TADOSS_DATABASE", None)
+            os.environ.pop("TADOSS_DEV", None)
+            create_app(None, token="t")
+
+
+class ConfigTests(unittest.TestCase):
+    def test_env_flag(self):
+        with patch.dict(os.environ):
+            os.environ.pop("TADOSS_FLAG", None)
+            self.assertTrue(env_flag("TADOSS_FLAG", True))
+            self.assertFalse(env_flag("TADOSS_FLAG", False))
+            for value, expected in [
+                ("1", True),
+                ("true", True),
+                ("YES", True),
+                ("On", True),
+                ("0", False),
+                ("false", False),
+                ("NO", False),
+                ("Off", False),
+            ]:
+                os.environ["TADOSS_FLAG"] = value
+                self.assertIs(env_flag("TADOSS_FLAG", None), expected, value)
+            os.environ["TADOSS_FLAG"] = "maybe"
+            with self.assertRaises(RuntimeError):
+                env_flag("TADOSS_FLAG", True)
+
+    def test_discovery_without_database(self):
+        with patch.dict(os.environ, {"TADOSS_AUTO_MIGRATE": "false"}):
+            app = create_app("postgresql://x@127.0.0.1:1/x", token="t")
+        headers = {"Authorization": "Bearer t"}
+        with TestClient(app) as client:
+            self.assertEqual(
+                client.get("/", headers=headers).json(),
+                ["schemas", "service", "tracks", "track-delete-requests"],
+            )
+            self.assertEqual(client.get("/service", headers=headers).status_code, 200)
+            missing = client.get(f"/track-delete-requests/{uuid4()}", headers=headers)
+            self.assertEqual(missing.status_code, 404)
+            validate(missing.json(), contract_schema("error"))
+            unavailable = client.get("/tracks", headers=headers)
+            self.assertEqual(unavailable.status_code, 503)
+            self.assertIn("Retry-After", unavailable.headers)
+            validate(unavailable.json(), contract_schema("error"))
+            self.assertEqual(client.get("/readyz").status_code, 503)
+            self.assertEqual(client.get("/healthz").status_code, 200)
 
 
 if __name__ == "__main__":

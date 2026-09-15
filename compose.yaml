@@ -24,7 +24,7 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     environment:
-      TADOSS_TOKEN: ${TADOSS_TOKEN:-}
+      TADOSS_TOKEN: ${TADOSS_TOKEN:?Set TADOSS_TOKEN}
       TADOSS_DATABASE: postgresql://tadoss:tadoss@db:5432/tadoss
     read_only: true
     tmpfs:

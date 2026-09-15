@@ -2,14 +2,15 @@ import base64
 import copy
 import hmac
 import json
+import logging
 import math
 import os
 from contextlib import asynccontextmanager
 from urllib.parse import unquote
 
+import psycopg
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
-from psycopg import OperationalError
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
@@ -26,6 +27,19 @@ from .validation import (
 )
 
 MAX_BODY = 1024 * 1024
+logger = logging.getLogger("tadoss")
+
+
+def env_flag(name, default):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    lowered = value.strip().lower()
+    if lowered in {"1", "true", "yes", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{name} must be true or false")
 
 
 def finite_float(value):
@@ -39,7 +53,7 @@ def resolve(value):
     if "$ref" in value:
         result = SPEC
         for part in value["$ref"].removeprefix("#/").split("/"):
-            result = result[part]
+            result = result[part.replace("~1", "/").replace("~0", "~")]
         return result
     return value
 
@@ -151,9 +165,12 @@ def page_response(request, records, options, event_listing=False):
     headers = {"X-Paging-Limit": str(limit), "X-Paging-Count": str(len(page))}
     if offset + limit < len(records):
         cursor = base64.urlsafe_b64encode(str(offset + limit).encode()).decode()
-        # Relative links avoid trusting a caller-supplied Host header.
-        url = request.url.replace(scheme="", netloc="").include_query_params(
-            page=cursor
+        # Relative links avoid trusting a caller-supplied Host header, and the
+        # URL token is never reflected back to the client.
+        url = (
+            request.url.remove_query_params("access_token")
+            .replace(scheme="", netloc="")
+            .include_query_params(page=cursor)
         )
         headers.update({"X-Paging-NextKey": cursor, "Link": f'<{url}>; rel="next"'})
     if event_listing:
@@ -161,7 +178,6 @@ def page_response(request, records, options, event_listing=False):
             options.get("reverse_order", False)
         ).lower()
         headers["X-Paging-Timerange"] = coverage(page)
-        page = [{k: v for k, v in event.items() if k != "track_id"} for event in page]
     return JSONResponse(page, headers=headers)
 
 
@@ -172,27 +188,24 @@ def dispatch(request, database, body):
     for name, value in request.path_params.items():
         if name != "name":
             validate(value, contract_schema("uuid"))
+    if path == "/":
+        return JSONResponse(["schemas", "service", "tracks", "track-delete-requests"])
+    if path == "/service":
+        return JSONResponse(
+            {
+                "name": "TADOSS",
+                "type": "urn:x-tads:service:tadoss",
+                "api_version": "0.1",
+                "service_version": __version__,
+            }
+        )
+    if path == "/track-delete-requests":
+        return page_response(request, [], options)
+    if path.startswith("/track-delete-requests/"):
+        raise APIError(
+            404, "Deletion request not found; deletions complete synchronously"
+        )
     with store.transaction(database, write=method in {"put", "post", "delete"}) as db:
-        if path == "/":
-            return JSONResponse(
-                ["schemas", "service", "tracks", "track-delete-requests"]
-            )
-        if path == "/service":
-            return JSONResponse(
-                {
-                    "name": "TADOSS",
-                    "type": "urn:x-tads:service:tadoss",
-                    "api_version": "0.1",
-                    "service_version": __version__,
-                }
-            )
-        if path == "/track-delete-requests":
-            return page_response(request, [], options)
-        if path.startswith("/track-delete-requests/"):
-            raise APIError(
-                404,
-                "Deletion request not found; deletions complete synchronously",
-            )
         collection = path.split("/")[1]
         identifier = request.path_params.get(
             "track_id", request.path_params.get("schema_id")
@@ -235,11 +248,9 @@ def dispatch(request, database, body):
             )
             if method == "delete":
                 store.writable(document)
-                db.executemany(
-                    "DELETE FROM events WHERE id = %s",
-                    ((event["id"],) for event in selected),
-                )
-                if selected:
+                if store.delete_events(
+                    db, identifier, [event["id"] for event in selected]
+                ):
                     document["events_updated"] = now()
                     store.save(db, "tracks", document)
                 return Response(status_code=204)
@@ -286,15 +297,24 @@ def dispatch(request, database, body):
 
 
 def create_app(database=None, token=None, dev=None):
-    database = database or os.getenv("TADOSS_DATABASE", store.DEFAULT_DATABASE)
     token = token if token is not None else os.getenv("TADOSS_TOKEN", "")
-    dev = dev if dev is not None else os.getenv("TADOSS_DEV", "").lower() == "true"
+    dev = dev if dev is not None else env_flag("TADOSS_DEV", False)
+    database = (
+        database
+        or os.getenv("TADOSS_DATABASE")
+        or (store.DEFAULT_DATABASE if dev else None)
+    )
+    if database is None:
+        raise RuntimeError("Set TADOSS_DATABASE")
     if not token and not dev:
         raise RuntimeError("Set TADOSS_TOKEN, or TADOSS_DEV=true for local development")
+    if not token:
+        logger.warning("Authentication disabled: development mode without a token")
+    auto_migrate = env_flag("TADOSS_AUTO_MIGRATE", True)
 
     @asynccontextmanager
     async def lifespan(app):
-        if os.getenv("TADOSS_AUTO_MIGRATE", "true").lower() == "true":
+        if auto_migrate:
             await run_in_threadpool(store.initialize, database)
         yield
 
@@ -313,12 +333,25 @@ def create_app(database=None, token=None, dev=None):
             headers=exc.headers,
         )
 
-    @app.exception_handler(OperationalError)
-    async def database_error(request, exc):
+    @app.exception_handler(psycopg.OperationalError)
+    async def database_unavailable(request, exc):
         return JSONResponse(
             APIError(503, "Database unavailable; retry later").body,
             status_code=503,
             headers={"Retry-After": "1"},
+        )
+
+    @app.exception_handler(psycopg.Error)
+    async def database_error(request, exc):
+        logger.exception("Database error", exc_info=exc)
+        return JSONResponse(
+            APIError(500, "Internal database error").body, status_code=500
+        )
+
+    @app.exception_handler(Exception)
+    async def server_error(request, exc):
+        return JSONResponse(
+            APIError(500, "Internal server error").body, status_code=500
         )
 
     @app.get("/healthz", include_in_schema=False)
