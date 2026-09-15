@@ -120,7 +120,8 @@ aqua exec -- docker-cli-plugin-docker-compose --profile app up --build -d --wait
 ```
 
 `docker-cli-plugin-docker-compose` is the binary installed by aqua; an existing
-`docker compose` installation also works. The `tadoss-postgres` Compose volume
+`docker compose` installation also works. Without `TADOSS_TOKEN` the app service
+exits with `Set TADOSS_TOKEN` after three attempts instead of restarting forever. The `tadoss-postgres` Compose volume
 retains data across restarts. `down` retains it; `down -v` deletes it.
 
 ## API coverage

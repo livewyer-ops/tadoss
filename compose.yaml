@@ -24,7 +24,9 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     environment:
-      TADOSS_TOKEN: ${TADOSS_TOKEN:?Set TADOSS_TOKEN}
+      # Compose interpolates the whole file even for `up db`, so the token cannot be
+      # required here; the app exits with "Set TADOSS_TOKEN" when it is missing.
+      TADOSS_TOKEN: ${TADOSS_TOKEN:-}
       TADOSS_DATABASE: postgresql://tadoss:tadoss@db:5432/tadoss
     read_only: true
     tmpfs:
@@ -33,7 +35,7 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-    restart: unless-stopped
+    restart: on-failure:3
 
 volumes:
   tadoss-postgres:
