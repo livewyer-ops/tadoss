@@ -1,0 +1,32 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: verify-recovered
+spec:
+  backoffLimit: 4
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: check
+        image: ($values.apiImage)
+        command:
+        - python
+        - /check/check.py
+        env:
+        - name: MODE
+          value: verify
+        - name: TADOSS_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: recovered-api-token
+              key: token
+        - name: API_URL
+          value: http://recovered-api:8000
+        volumeMounts:
+        - name: check
+          mountPath: /check
+      volumes:
+      - name: check
+        configMap:
+          name: api-check

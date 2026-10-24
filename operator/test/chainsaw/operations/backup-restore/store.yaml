@@ -1,0 +1,98 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: backup-credentials
+stringData:
+  ACCESS_KEY_ID: qualification
+  ACCESS_SECRET_KEY: qualification-only-secret
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backup-store
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backup-store
+  template:
+    metadata:
+      labels:
+        app: backup-store
+    spec:
+      containers:
+      - name: s3
+        image: rustfs/rustfs:1.0.0
+        env:
+        - name: RUSTFS_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: backup-credentials
+              key: ACCESS_KEY_ID
+        - name: RUSTFS_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: backup-credentials
+              key: ACCESS_SECRET_KEY
+        - name: RUSTFS_ADDRESS
+          value: :9000
+        - name: RUSTFS_STORAGE_CLASS_STANDARD
+          value: EC:0
+        - name: RUSTFS_ERASURE_SET_DRIVE_COUNT
+          value: '1'
+        ports:
+        - name: s3
+          containerPort: 9000
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: logs
+          mountPath: /logs
+      volumes:
+      - name: data
+        emptyDir: {}
+      - name: logs
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backup-store
+spec:
+  selector:
+    app: backup-store
+  ports:
+  - port: 80
+    targetPort: s3
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: create-bucket
+spec:
+  backoffLimit: 8
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: bucket
+        image: amazon/aws-cli:2.32.34
+        args:
+        - --endpoint-url=http://backup-store
+        - s3api
+        - create-bucket
+        - --bucket
+        - qualification
+        env:
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: backup-credentials
+              key: ACCESS_KEY_ID
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: backup-credentials
+              key: ACCESS_SECRET_KEY
+        - name: AWS_DEFAULT_REGION
+          value: us-east-1

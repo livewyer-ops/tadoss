@@ -1,0 +1,3 @@
+profile: single-server
+baseDomain: tadoss.localtest.me
+ingressClassName: traefik

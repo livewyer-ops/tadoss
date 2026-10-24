@@ -1,9 +1,12 @@
 **
-!pyproject.toml
-!uv.lock
+!src/
+!src/app/
+!src/app/**
+!src/pyproject.toml
+!src/uv.lock
 !README.md
 !LICENSE
 !NOTICE
-!tadoss/
-!tadoss/**
 **/__pycache__/
+
+**/*.egg-info/

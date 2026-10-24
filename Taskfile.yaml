@@ -1,247 +1,44 @@
-version: "3"
+version: '3'
 set: [errexit, nounset, pipefail]
-
 vars:
   PROFILE: '{{.PROFILE | default "local-kind"}}'
-  ENV: '{{.ENV | default "kind"}}'
+  ENV: '{{.ENV | default "local-kind"}}'
+  ENV_DIR: '{{.ENV_DIR | default (printf "%s/deploy/environments/%s" .ROOT_DIR .ENV)}}'
+  INSTANCE: '{{.INSTANCE | default ""}}'
   CLUSTER: '{{.CLUSTER | default "tadoss"}}'
   KUBECONFIG: '{{.KUBECONFIG | default (printf "%s/.local/%s.kubeconfig" .ROOT_DIR .CLUSTER)}}'
-  # Namespace and name of the Tadoss instance; must match instance.* of the environment.
-  NAMESPACE: '{{.NAMESPACE | default "tads"}}'
-  INSTANCE: tadoss
-  HELM_DIFF_VERSION: v3.15.12
-  HELMFILE: helmfile --file deploy/helmfile.yaml.gotmpl --environment {{.ENV}}
-  HELMFILE_CMD: '{{.HELMFILE_CMD | default "apply"}}'
-  HELMFILE_ARGS: '{{.HELMFILE_ARGS | default ""}}'
-  # Content hash of every input to either image. A new tag per source change makes the
-  # operator roll the API and run the schema Job again.
-  IMAGE_HASH:
-    sh: git ls-files --cached --others --exclude-standard -z -- Dockerfile pyproject.toml uv.lock tadoss 'operator/*.go' operator/go.mod operator/go.sum operator/Dockerfile | xargs -0 git hash-object | git hash-object --stdin | cut -c1-12
-  IMAGE_TAG: dev-{{.IMAGE_HASH}}
-  API_IMAGE_REPOSITORY: livewyer/tadoss-api
-  OPERATOR_IMAGE_REPOSITORY: livewyer/tadoss-operator
-  KUBECONFORM_ARGS: >-
-    -strict -summary -kubernetes-version 1.34.0
-    -schema-location default
-    -schema-location '.local/schemas/{{"{{ .ResourceKind }}"}}_{{"{{ .ResourceAPIVersion }}"}}.json'
-    -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{"{{ .Group }}"}}/{{"{{ .ResourceKind }}"}}_{{"{{ .ResourceAPIVersion }}"}}.json'
-
+  IMAGE_TAG:
+    sh: python3 scripts/image_tag.py
+  ENV_COMMAND: 'uv run --project src --frozen python scripts/environment.py'
+  ENV_ARGS: '--directory {{.ENV_DIR}} --kubeconfig {{.KUBECONFIG}} {{if .INSTANCE}}--instance {{.INSTANCE}}{{end}}'
 env:
-  # Lets aqua shims resolve project tools from any working directory, e.g. kustomize run by helmfile.
   AQUA_CONFIG: '{{.ROOT_DIR}}/aqua.yml'
-  # Repository-local Helm plugins; gitignored under .local and cached in CI.
   HELM_PLUGINS: '{{.ROOT_DIR}}/.local/helm/plugins'
-
+  PATH: '{{.HOME}}/.local/share/aquaproj-aqua/bin:{{.PATH}}'
+includes:
+  dev: .tasks/dev.yaml
+  env: .tasks/env.yaml
+  instance: .tasks/instance.yaml
+  operator: .tasks/operator.yaml
+  test: .tasks/test.yaml
+  lint: .tasks/lint.yaml
+  kind: .tasks/kind.yaml
+  images: .tasks/images.yaml
+  security: .tasks/security.yaml
+  release: .tasks/release.yaml
 tasks:
   default:
     cmds: [task --list]
-
   setup:
-    desc: Install development dependencies (Python environment, helm-diff)
+    desc: Install locked development dependencies
     cmds:
-      - uv sync --frozen --extra otel
-      - task: tools:helm-diff
-
-  tools:helm-diff:
-    desc: Install the pinned helm-diff plugin into .local/helm/plugins
-    status:
-      - helm plugin list | grep -qE "^diff\s+{{trimPrefix "v" .HELM_DIFF_VERSION}}\b"
-    cmds:
-      - mkdir -p .local/helm/plugins
-      - helm plugin uninstall diff 2>/dev/null || true
-      - helm plugin install https://github.com/databus23/helm-diff --version {{.HELM_DIFF_VERSION}} --verify=false
-
-  deps:
-    desc: Start local PostgreSQL
-    cmds: [aqua exec -- docker-cli-plugin-docker-compose up -d --wait db]
-
-  dev:
-    desc: Run the local API against PostgreSQL
-    deps: [deps]
-    env:
-      TADOSS_DEV: "true"
-    cmds: [uv run tadoss]
-
+      - uv sync --project src --frozen --extra otel
+      - task: dev:helm-diff
   check:
-    desc: Lint and test the API, operator, charts, manifests and workflows
-    deps: [deps]
+    desc: Run local checks used by CI
     cmds:
-      - uv run ruff check .
-      - uv run ruff format --check .
-      - uv run pyright
-      - uv run coverage run -m unittest discover -s tests -v
-      - uv run coverage report --fail-under=90 --show-missing
+      - task: lint:all
+      - task: test:all
       - task: operator:test
       - task: operator:lint
-      - task: charts:lint
-      - task: manifests:check
-      - yamlfmt -lint
-      - actionlint
-
-  fmt:
-    desc: Format Python, Go and YAML
-    cmds:
-      - uv run ruff check --fix .
-      - uv run ruff format .
-      - gofmt -l -w operator
-      - cd operator && golangci-lint run --fix ./...
-      - yamlfmt
-
-  charts:lint:
-    desc: Lint the operator and issuer charts with every ci values file
-    cmds:
-      - helm lint deploy/charts/tadoss-operator
-      - for: {var: OPERATOR_CI_VALUES}
-        cmd: helm lint deploy/charts/tadoss-operator -f {{.ITEM}}
-      - helm lint deploy/charts/tadoss-issuer
-      - helm lint deploy/charts/tadoss-issuer -f deploy/charts/tadoss-issuer/ci/acme-values.yaml
-    vars:
-      OPERATOR_CI_VALUES:
-        sh: ls deploy/charts/tadoss-operator/ci/*.yaml
-
-  schema:generate:
-    desc: Convert the Tadoss CRD into a kubeconform JSON schema
-    sources: [operator/config/crd/bases/tadoss.livewyer.io_tadosses.yaml]
-    generates: [.local/schemas/tadoss_v1alpha1.json]
-    cmds:
-      - mkdir -p .local/schemas
-      # Same transformation as kubeconform's openapi2jsonschema with additional properties
-      # denied: every object that declares properties is closed.
-      - >-
-        yq -o=json '.spec.versions[] | select(.name == "v1alpha1") | .schema.openAPIV3Schema
-        | with(.. | select(type == "!!map" and has("properties") and (has("additionalProperties") | not)); .additionalProperties = false)'
-        operator/config/crd/bases/tadoss.livewyer.io_tadosses.yaml > .local/schemas/tadoss_v1alpha1.json
-
-  manifests:check:
-    desc: Validate rendered manifests against schemas and lint Chainsaw tests
-    deps: [schema:generate]
-    cmds:
-      - kubectl kustomize deploy/instances/base | kubeconform {{.KUBECONFORM_ARGS}}
-      - for: [local-kind, edge, single-server, multi-server]
-        cmd: '{{.HELMFILE}} --state-values-set instance.spec.profile={{.ITEM}} template -l name=tadoss | kubeconform {{.KUBECONFORM_ARGS}}'
-      # The upstream schema store has no CustomResourceDefinition schema; the API server validates it.
-      - '{{.HELMFILE}} template -l name=tadoss-operator | kubeconform {{.KUBECONFORM_ARGS}} -skip CustomResourceDefinition'
-      - for: {var: OPERATOR_CI_VALUES}
-        cmd: helm template tadoss-operator deploy/charts/tadoss-operator -n tadoss-system -f {{.ITEM}} | kubeconform {{.KUBECONFORM_ARGS}} -skip CustomResourceDefinition
-      - '{{.HELMFILE}} --state-values-set tls.mode=acme,tls.acme.email=ops@example.com template -l name=tadoss-issuer | kubeconform {{.KUBECONFORM_ARGS}}'
-      - chainsaw lint configuration -f operator/test/chainsaw/configuration.yaml
-      - for: {var: CHAINSAW_TESTS}
-        cmd: chainsaw lint test -f {{.ITEM}}
-    vars:
-      CHAINSAW_TESTS:
-        sh: find operator/test/chainsaw -name chainsaw-test.yaml | sort
-      OPERATOR_CI_VALUES:
-        sh: ls deploy/charts/tadoss-operator/ci/*.yaml
-
-  operator:generate:
-    desc: Regenerate the CRD, deepcopy code, chart CRD template and RBAC
-    dir: operator
-    cmds: [make generate]
-
-  operator:test:
-    desc: Unit and envtest reconcile tests for the operator
-    dir: operator
-    cmds: [make test]
-
-  operator:lint:
-    desc: Vet and lint the operator
-    dir: operator
-    cmds: [make vet, make lint]
-
-  images:build:
-    desc: Build the API and operator images tagged with the source content hash
-    status:
-      - docker image inspect {{.API_IMAGE_REPOSITORY}}:{{.IMAGE_TAG}} {{.OPERATOR_IMAGE_REPOSITORY}}:{{.IMAGE_TAG}} >/dev/null
-    cmds:
-      - docker build -t {{.API_IMAGE_REPOSITORY}}:{{.IMAGE_TAG}} .
-      - docker build -t {{.OPERATOR_IMAGE_REPOSITORY}}:{{.IMAGE_TAG}} operator
-
-  kind:up:
-    desc: Create or reuse the Kind cluster, load freshly built images and deploy PROFILE
-    vars:
-      KIND_CONFIG: 'deploy/kind/{{if eq .PROFILE "multi-server"}}multi-node{{else}}single-node{{end}}.yaml'
-    cmds:
-      - mkdir -p .local
-      - kind get clusters | grep -qx '{{.CLUSTER}}' || kind create cluster --name {{.CLUSTER}} --config {{.KIND_CONFIG}} --kubeconfig {{.KUBECONFIG}}
-      - kind export kubeconfig --name {{.CLUSTER}} --kubeconfig {{.KUBECONFIG}}
-      - '{{if eq .PROFILE "multi-server"}}test "$(kind get nodes --name {{.CLUSTER}} | wc -l)" -ge 4 || { echo "multi-server needs the four-node Kind configuration; run task kind:down first" >&2; exit 1; }{{else}}true{{end}}'
-      - task: images:build
-      - kind load docker-image --name {{.CLUSTER}} {{.API_IMAGE_REPOSITORY}}:{{.IMAGE_TAG}} {{.OPERATOR_IMAGE_REPOSITORY}}:{{.IMAGE_TAG}}
-      - task: env:apply
-        vars:
-          ENV: kind
-          HELMFILE_CMD: sync
-          HELMFILE_ARGS: --state-values-set instance.spec.profile={{.PROFILE}},images.tag={{.IMAGE_TAG}}
-      - task: env:wait
-      - task: env:summary
-
-  kind:test:
-    desc: Deploy on Kind, confirm the deployment is idempotent, run Chainsaw
-    cmds:
-      - task: kind:up
-      - task: env:diff
-        vars:
-          ENV: kind
-          HELMFILE_ARGS: --state-values-set instance.spec.profile={{.PROFILE}},images.tag={{.IMAGE_TAG}}
-      - task: operator:e2e:chainsaw
-
-  kind:down:
-    desc: Delete the disposable Kind cluster and its kubeconfig (all data is lost)
-    prompt: Delete Kind cluster "{{.CLUSTER}}" and all of its data?
-    cmds:
-      - kind delete cluster --name {{.CLUSTER}}
-      - rm -f {{.KUBECONFIG}}
-
-  operator:e2e:chainsaw:
-    desc: Run Chainsaw against the selected cluster with the deployed API image
-    env:
-      KUBECONFIG: '{{.KUBECONFIG}}'
-    vars:
-      API_IMAGE:
-        sh: kubectl --kubeconfig {{.KUBECONFIG}} -n {{.NAMESPACE}} get tadoss/{{.INSTANCE}} -o jsonpath='{.spec.image}'
-      # Tests labelled with a profile run only on that profile.
-      CHAINSAW_SELECTOR: '{{if eq .PROFILE "multi-server"}}{{else}}--selector=!test.tadoss.io/profile{{end}}'
-    cmds:
-      - mkdir -p reports/{{.PROFILE}}
-      - chainsaw test --config operator/test/chainsaw/configuration.yaml --test-dir operator/test/chainsaw --report-path reports/{{.PROFILE}} --set-string apiImage={{.API_IMAGE}} {{.CHAINSAW_SELECTOR}}
-
-  env:init:
-    desc: Create deploy/environments/NAME.yaml from _example.yaml with DOMAIN as the API host
-    requires:
-      vars: [NAME, DOMAIN]
-    preconditions:
-      - sh: test ! -e deploy/environments/{{.NAME}}.yaml
-        msg: deploy/environments/{{.NAME}}.yaml already exists
-    cmds:
-      - yq '.instance.spec.ingress.host = "{{.DOMAIN}}"' deploy/environments/_example.yaml > deploy/environments/{{.NAME}}.yaml
-      - 'echo "Created deploy/environments/{{.NAME}}.yaml. Set tls.acme.email and images.tag, then run: task env:diff ENV={{.NAME}} KUBECONFIG=<path>"'
-
-  env:diff:
-    desc: Show what env:apply would change on ENV
-    deps: [tools:helm-diff]
-    env:
-      KUBECONFIG: '{{.KUBECONFIG}}'
-    cmds: ['{{.HELMFILE}} diff {{.HELMFILE_ARGS}}']
-
-  env:apply:
-    desc: Install platform, issuer, operator and instance on ENV
-    deps: [tools:helm-diff]
-    env:
-      KUBECONFIG: '{{.KUBECONFIG}}'
-    cmds: ['{{.HELMFILE}} {{.HELMFILE_CMD}} {{.HELMFILE_ARGS}}']
-
-  env:wait:
-    desc: Wait until the instance reports Ready for its current generation
-    env:
-      KUBECONFIG: '{{.KUBECONFIG}}'
-    cmds:
-      - kubectl -n {{.NAMESPACE}} wait tadoss/{{.INSTANCE}} --timeout=10m --for=jsonpath='{.status.observedGeneration}'="$(kubectl -n {{.NAMESPACE}} get tadoss/{{.INSTANCE}} -o jsonpath='{.metadata.generation}')"
-      - kubectl -n {{.NAMESPACE}} wait tadoss/{{.INSTANCE}} --timeout=10m --for=condition=Ready
-
-  env:summary:
-    desc: Show the instance endpoint, credential Secret name and phase
-    env:
-      KUBECONFIG: '{{.KUBECONFIG}}'
-    cmds:
-      - kubectl -n {{.NAMESPACE}} get tadoss/{{.INSTANCE}} -o custom-columns=ENDPOINT:.status.endpoint,TOKEN_SECRET:.status.tokenSecret,PHASE:.status.phase
-      - echo "kubeconfig {{.KUBECONFIG}}"
+      - task: test:manifests

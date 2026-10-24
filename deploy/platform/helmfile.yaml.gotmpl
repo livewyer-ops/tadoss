@@ -1,0 +1,65 @@
+values:
+  - values.yaml
+---
+{{- $v := .Values }}
+{{- $tls := $v.tls }}
+{{- $issuer := $tls.issuerName | default (printf "tadoss-%s" ($tls.mode | lower)) }}
+{{- if and (ne $tls.mode "existing") (not $v.platform.certManager.enabled) }}
+{{- fail "Managed TLS requires cert-manager; use tls.mode=existing for shared prerequisites" }}
+{{- end }}
+{{- $issuerNeeds := list }}
+{{- if $v.platform.certManager.enabled }}{{ $issuerNeeds = append $issuerNeeds "cert-manager/cert-manager" }}{{ end }}
+repositories:
+  - name: cloudnative-pg
+    url: https://cloudnative-pg.github.io/charts
+  - name: traefik
+    url: https://traefik.github.io/charts
+  - name: jetstack
+    url: https://charts.jetstack.io
+
+helmDefaults:
+  createNamespace: true
+  wait: true
+  waitForJobs: true
+  timeout: {{ $v.platform.timeoutSeconds }}
+  syncArgs: [--server-side=true]
+  diffArgs: [--server-side=true]
+
+releases:
+{{- if $v.platform.cnpg.enabled }}
+  - name: cnpg
+    namespace: cnpg-system
+    chart: cloudnative-pg/cloudnative-pg
+    version: 0.28.2
+    values:
+      - {{ toYaml $v.platform.cnpg.values | nindent 8 }}
+{{- end }}
+{{- if $v.platform.traefik.enabled }}
+  - name: traefik
+    namespace: traefik
+    chart: traefik/traefik
+    version: 40.2.0
+    values:
+      - {{ toYaml $v.platform.traefik.values | nindent 8 }}
+{{- end }}
+{{- if $v.platform.certManager.enabled }}
+  - name: cert-manager
+    namespace: cert-manager
+    chart: jetstack/cert-manager
+    version: v1.20.2
+    values:
+      - {{ toYaml $v.platform.certManager.values | nindent 8 }}
+{{- end }}
+{{- if ne $tls.mode "existing" }}
+  # Released into cert-manager's namespace, where it reads ACME account Secrets.
+  - name: tadoss-issuer
+    namespace: cert-manager
+    chart: ../charts/tadoss-issuer
+    {{- with $issuerNeeds }}
+    needs: {{ toYaml . | nindent 6 }}
+    {{- end }}
+    values:
+      - name: {{ $issuer }}
+        mode: {{ $tls.mode }}
+        acme: {{ toYaml $tls.acme | nindent 10 }}
+{{- end }}

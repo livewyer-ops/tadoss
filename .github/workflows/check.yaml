@@ -8,7 +8,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: checks-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   check:
@@ -16,11 +16,13 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
       - uses: ./.github/actions/setup
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/uv
-          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+          key: uv-${{ runner.os }}-${{ hashFiles('src/uv.lock') }}
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -30,35 +32,35 @@ jobs:
           key: go-${{ runner.os }}-${{ hashFiles('operator/go.sum', 'operator/Makefile') }}
       - run: task setup
       - run: task check
+      - run: task security:audit
       - name: Generated files are current
         run: |
           task operator:generate
-          git add -A -- operator/api operator/config deploy/charts/tadoss-operator
+          git add -A -- operator/api operator/config deploy/operator
           git diff --cached --exit-code --stat
   kind:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        profile: [local-kind, multi-server]
+        profile: [local-kind, edge, single-server, multi-server]
+        runner: [ubuntu-24.04]
+        include:
+          - profile: edge
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
       - uses: ./.github/actions/setup
       - run: task kind:test PROFILE=${{ matrix.profile }}
-      - name: Capture diagnostics
+      - name: Capture restricted diagnostics
         if: failure()
-        env:
-          KUBECONFIG: ${{ github.workspace }}/.local/tadoss.kubeconfig
-        run: |
-          mkdir -p reports
-          kubectl get nodes,pods,deployments,jobs,tadosses,clusters.postgresql.cnpg.io -A -o wide > reports/resources.txt || true
-          kubectl get events -A --sort-by=.metadata.creationTimestamp > reports/events.txt || true
-          kubectl logs -n tadoss-system deployment/tadoss-operator --all-containers --tail=500 > reports/operator.log || true
-          kind export logs reports/kind --name tadoss || true
+        run: uv run --project src python scripts/support_bundle.py --kubeconfig .local/tadoss.kubeconfig --namespace tads --output reports/support.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: kind-${{ matrix.profile }}
+          name: kind-${{ matrix.profile }}-${{ matrix.runner }}
           path: reports/
           if-no-files-found: warn

@@ -4,7 +4,7 @@ registries:
 packages:
   - name: go-task/task@v3.46.4
   - name: astral-sh/uv@0.9.25
-  - name: golang/go@go1.26.5
+  - name: golang/go@go1.26.9
   - name: golangci/golangci-lint@v2.12.2
   - name: kubernetes-sigs/controller-tools/controller-gen@v0.21.0
   - name: kubernetes-sigs/kind@v0.32.0
@@ -18,3 +18,4 @@ packages:
   - name: google/yamlfmt@v0.21.0
   - name: rhysd/actionlint@v1.7.12
   - name: docker/compose@v5.5.1
+  - name: google/osv-scanner@v2.6.0

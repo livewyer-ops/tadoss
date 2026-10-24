@@ -1,0 +1,188 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: backup-restores-persisted-events
+  labels:
+    test.tadoss.io/domain: operations
+    test.tadoss.io/tier: standard
+spec:
+  catch:
+  - describe:
+      apiVersion: tadoss.livewyer.io/v1alpha1
+      kind: Tadoss
+  - get:
+      apiVersion: batch/v1
+      kind: Job
+  - get:
+      apiVersion: postgresql.cnpg.io/v1
+      kind: Cluster
+  - get:
+      apiVersion: postgresql.cnpg.io/v1
+      kind: Backup
+  - get:
+      apiVersion: postgresql.cnpg.io/v1
+      kind: ScheduledBackup
+  - events: {}
+  - podLogs:
+      selector: app.kubernetes.io/name=tadoss
+      tail: 100
+  - podLogs:
+      selector: cnpg.io/cluster
+      tail: 100
+  - podLogs:
+      namespace: tadoss-system
+      selector: app.kubernetes.io/name=tadoss-operator
+      tail: 100
+  steps:
+  - name: create-object-store
+    try:
+    - apply:
+        file: store.yaml
+    - assert:
+        resource:
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: create-bucket
+          status:
+            succeeded: 1
+  - name: write-and-back-up
+    try:
+    - apply:
+        file: source.yaml
+    - assert:
+        resource:
+          apiVersion: tadoss.livewyer.io/v1alpha1
+          kind: Tadoss
+          metadata:
+            name: journey
+          status:
+            phase: Ready
+    - apply:
+        file: ../../fixtures/api-check.yaml
+    - apply:
+        file: ../../instance/lifecycle/resources/seed.yaml
+    - assert:
+        resource:
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: seed
+          status:
+            succeeded: 1
+    - apply:
+        resource:
+          apiVersion: postgresql.cnpg.io/v1
+          kind: Backup
+          metadata:
+            name: verification-backup
+          spec:
+            cluster:
+              name: journey-db
+            method: barmanObjectStore
+    - assert:
+        resource:
+          apiVersion: postgresql.cnpg.io/v1
+          kind: Backup
+          metadata:
+            name: verification-backup
+          status:
+            phase: completed
+  - name: recover-and-verify-api
+    try:
+    - apply:
+        file: restored.yaml
+    - assert:
+        resource:
+          apiVersion: tadoss.livewyer.io/v1alpha1
+          kind: Tadoss
+          metadata:
+            name: recovered
+          status:
+            phase: Ready
+    - apply:
+        file: verify.yaml
+    - assert:
+        resource:
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: verify-recovered
+          status:
+            succeeded: 1
+  - name: retained-database-keeps-scheduled-backups
+    try:
+    - patch:
+        resource:
+          apiVersion: tadoss.livewyer.io/v1alpha1
+          kind: Tadoss
+          metadata:
+            name: journey
+          spec:
+            deletionPolicy: Retain
+    - delete:
+        ref:
+          apiVersion: tadoss.livewyer.io/v1alpha1
+          kind: Tadoss
+          name: journey
+    - assert:
+        resource:
+          apiVersion: postgresql.cnpg.io/v1
+          kind: Cluster
+          metadata:
+            name: journey-db
+            (ownerReferences == null || length(ownerReferences) == `0`): true
+          status:
+            readyInstances: 1
+    - assert:
+        resource:
+          apiVersion: postgresql.cnpg.io/v1
+          kind: ScheduledBackup
+          metadata:
+            name: journey-backup
+            (ownerReferences == null || length(ownerReferences) == `0`): true
+    - script:
+        env:
+        - name: NAMESPACE
+          value: ($namespace)
+        content: |
+          python3 - <<'PYTHON'
+          import json, os, subprocess, time
+          command = ['kubectl', '-n', os.environ['NAMESPACE']]
+          def backups():
+              return json.loads(subprocess.check_output(command + ['get', 'backups', '-l', 'cnpg.io/scheduled-backup=journey-backup', '-o', 'json']))['items']
+          previous = {item['metadata']['uid'] for item in backups()}
+          subprocess.run(command + ['patch', 'scheduledbackup', 'journey-backup', '--type=merge', '-p', json.dumps({'spec': {'schedule': '*/10 * * * * *'}})], check=True)
+          deadline = time.monotonic() + 150
+          while time.monotonic() < deadline:
+              if any(item['metadata']['uid'] not in previous and item.get('status', {}).get('phase') == 'completed' for item in backups()):
+                  print('A new scheduled backup completed after Retain deletion')
+                  break
+              time.sleep(2)
+          else:
+              raise SystemExit('Retained database did not complete a new scheduled backup')
+          PYTHON
+  - name: stop-databases-before-namespace-cleanup
+    try:
+    - delete:
+        ref:
+          apiVersion: tadoss.livewyer.io/v1alpha1
+          kind: Tadoss
+          name: recovered
+    - delete:
+        ref:
+          apiVersion: postgresql.cnpg.io/v1
+          kind: ScheduledBackup
+          name: journey-backup
+    - delete:
+        ref:
+          apiVersion: postgresql.cnpg.io/v1
+          kind: Cluster
+          name: journey-db
+    # Finish CNPG shutdown before deleting the fixture namespace.
+    - wait:
+        apiVersion: v1
+        kind: Pod
+        selector: cnpg.io/cluster
+        for:
+          deletion: {}

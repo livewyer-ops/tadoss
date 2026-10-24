@@ -1,0 +1,28 @@
+# Supply archive-db-uri (key uri) and archive-db-ca (key ca.pem) in tads first.
+apiVersion: tadoss.livewyer.io/v1alpha1
+kind: Tadoss
+metadata:
+  name: archive-external
+  namespace: tads
+spec:
+  version: 0.1.0
+  profile: single-server
+  deletionProtection: true
+  auth:
+    tokenSecret: archive-api-token
+  ingress:
+    host: archive.example.com
+    tlsSecretName: archive-api-tls
+    # Omit className to use the cluster's default IngressClass.
+  api:
+    replicaCount: 1
+  worker:
+    replicaCount: 1
+  backends:
+    db:
+      providedBy: external
+      external:
+        existingSecret: archive-db-uri
+        caConfigMap:
+          name: archive-db-ca
+          key: ca.pem

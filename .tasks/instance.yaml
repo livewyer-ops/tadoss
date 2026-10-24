@@ -1,0 +1,10 @@
+version: '3'
+tasks:
+  init:
+    desc: Add a namespaced instance to an existing environment
+    requires: {vars: [INSTANCE, NAMESPACE, VERSION]}
+    cmds: ['{{.ENV_COMMAND}} instance-init {{.ENV_ARGS}} --namespace {{.NAMESPACE}} --version {{.VERSION}}']
+  apply:
+    desc: Apply only the selected instance
+    requires: {vars: [INSTANCE]}
+    cmds: ['{{.ENV_COMMAND}} instance-apply {{.ENV_ARGS}}']

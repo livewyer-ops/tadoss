@@ -1,0 +1,13 @@
+version: '3'
+tasks:
+  generate:
+    desc: Generate CRDs, RBAC, deepcopy code and installation YAML
+    dir: operator
+    cmds: [make generate]
+  test:
+    desc: Run operator tests against a Kubernetes API server with the race detector
+    dir: operator
+    cmds: [make test]
+  lint:
+    dir: operator
+    cmds: [make vet, make lint]

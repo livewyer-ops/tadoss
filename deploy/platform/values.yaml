@@ -1,0 +1,30 @@
+platform:
+  timeoutSeconds: 600
+  cnpg:
+    enabled: true
+    values:
+      fullnameOverride: cnpg-controller-manager
+      crds:
+        create: true
+  traefik:
+    enabled: true
+    values:
+      deployment:
+        replicas: 1
+      ingressClass:
+        enabled: true
+        name: traefik
+      service:
+        type: LoadBalancer
+  certManager:
+    enabled: true
+    values:
+      crds:
+        enabled: true
+tls:
+  mode: existing
+  issuerName: ''
+  acme:
+    email: ''
+    server: production
+    ingressClassName: traefik

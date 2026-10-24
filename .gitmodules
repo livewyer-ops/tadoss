@@ -1,0 +1,3 @@
+[submodule "src/vendor/bbc-tads"]
+	path = src/vendor/bbc-tads
+	url = https://github.com/bbc/tads.git

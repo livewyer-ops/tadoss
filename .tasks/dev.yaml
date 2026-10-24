@@ -1,0 +1,18 @@
+version: '3'
+tasks:
+  helm-diff:
+    status: ["helm plugin list | grep -qE '^diff[[:space:]]+3.15.12' "]
+    cmds:
+      - mkdir -p .local/helm/plugins
+      - helm plugin install https://github.com/databus23/helm-diff --version v3.15.12
+  db:
+    desc: Start the local PostgreSQL test database
+    cmds: [docker compose up -d --wait db]
+  up:
+    desc: Start the API, migration and worker with PostgreSQL
+    cmds: [docker compose --profile app up -d --build]
+  serve:
+    desc: Run the API after explicit schema initialisation
+    cmds:
+      - uv run --project src tadoss migrate
+      - uv run --project src tadoss serve

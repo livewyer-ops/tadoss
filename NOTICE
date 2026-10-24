@@ -5,7 +5,7 @@ specification and JSON schemas, licensed under Apache-2.0.
 Source: https://github.com/bbc/tads
 Revision: d2b90e52d54db947f4c8ddab571538ed18ab3052
 The bundle resolves external file references into a single JSON document.
-Upstream license: tadoss/contract/LICENCE.md
+Upstream license: src/app/tadoss/contract/LICENCE.md
 
 TADOSS is an independent implementation. The BBC TADS and TAMS specifications
 define its data model and timeline conventions. TAMOSS provided the reference

@@ -1,0 +1,9 @@
+version: '3'
+tasks:
+  check:
+    desc: Check release version, schema and artifact inputs
+    cmds: [uv run --project src python scripts/release.py check]
+  artifacts:
+    desc: Assemble installation and release metadata from immutable images
+    requires: {vars: [RUNTIME_IMAGE, OPERATOR_IMAGE]}
+    cmds: ['uv run --project src python scripts/release.py artifacts --runtime-image {{.RUNTIME_IMAGE}} --operator-image {{.OPERATOR_IMAGE}}']

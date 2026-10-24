@@ -1,0 +1,3 @@
+profile: edge
+baseDomain: tadoss.localtest.me
+ingressClassName: traefik

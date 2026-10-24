@@ -2,7 +2,6 @@
 
 CONTROLLER_GEN ?= controller-gen
 KUSTOMIZE ?= kustomize
-CHART := ../deploy/charts/tadoss-operator
 LOCALBIN := $(CURDIR)/bin
 ENVTEST_K8S_VERSION ?= 1.36
 ENVTEST_VERSION ?= v0.24.1
@@ -11,8 +10,7 @@ ENVTEST := $(LOCALBIN)/setup-envtest
 generate:
 	$(CONTROLLER_GEN) object paths=./api/...
 	$(CONTROLLER_GEN) crd rbac:roleName=tadoss-operator paths=./... output:crd:artifacts:config=config/crd/bases output:rbac:artifacts:config=config/rbac
-	{ printf '{{- if .Values.crds.install }}\n'; $(KUSTOMIZE) build config/crd; printf '{{- end }}\n'; } > $(CHART)/templates/crd.yaml
-	cp config/rbac/role.yaml $(CHART)/files/role.yaml
+	$(KUSTOMIZE) build ../deploy/operator > ../deploy/operator/install.yaml
 
 $(ENVTEST):
 	GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@$(ENVTEST_VERSION)

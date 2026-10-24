@@ -8,28 +8,114 @@
   "minimumReleaseAge": "7 days",
   "packageRules": [
     {
-      "matchManagers": ["helmfile"],
+      "matchDatasources": [
+        "helm"
+      ],
       "groupName": "helm charts"
     },
     {
-      "matchManagers": ["pep621", "gomod", "github-actions", "dockerfile", "docker-compose"],
-      "matchUpdateTypes": ["minor", "patch"],
+      "matchManagers": [
+        "pep621",
+        "gomod",
+        "github-actions",
+        "dockerfile",
+        "docker-compose"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
       "groupName": "minor and patch"
     }
   ],
   "customManagers": [
     {
       "customType": "regex",
-      "managerFilePatterns": ["/^deploy/kind/.+\\.ya?ml$/"],
-      "matchStrings": ["image: (?<depName>kindest/node):(?<currentValue>v[0-9.]+)@(?<currentDigest>sha256:[a-f0-9]+)"],
+      "managerFilePatterns": [
+        "/^deploy/kind/.+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "image: (?<depName>kindest/node):(?<currentValue>v[0-9.]+)@(?<currentDigest>sha256:[a-f0-9]+)"
+      ],
       "datasourceTemplate": "docker"
     },
     {
       "customType": "regex",
-      "managerFilePatterns": ["/^Taskfile\\.yaml$/"],
-      "matchStrings": ["HELM_DIFF_VERSION: (?<currentValue>v[0-9.]+)"],
+      "managerFilePatterns": [
+        "/^\\.tasks/dev\\.yaml$/"
+      ],
+      "matchStrings": [
+        "--version (?<currentValue>v[0-9.]+)"
+      ],
       "depNameTemplate": "databus23/helm-diff",
       "datasourceTemplate": "github-releases"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^operator/api/v1alpha1/tadoss_types\\.go$/"
+      ],
+      "matchStrings": [
+        "DefaultPostgresImage = \"(?<depName>[^\"\\s]+):(?<currentValue>[^\":\\s]+)\""
+      ],
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^operator/test/chainsaw/.+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "image(?:Name)?: [\"\\']?(?<depName>[a-z0-9./_-]+(?::[0-9]+)?/[a-z0-9./_-]+):(?<currentValue>[A-Za-z0-9_.-]+)"
+      ],
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^src/app/tadoss/release\\.json$/"
+      ],
+      "matchStrings": [
+        "\"cloudnative-pg\":\\s*\"(?<currentValue>[^\"\\s]+)\""
+      ],
+      "depNameTemplate": "cloudnative-pg",
+      "datasourceTemplate": "helm",
+      "registryUrlTemplate": "https://cloudnative-pg.github.io/charts"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^src/app/tadoss/release\\.json$/"
+      ],
+      "matchStrings": [
+        "\"traefik\":\\s*\"(?<currentValue>[^\"\\s]+)\""
+      ],
+      "depNameTemplate": "traefik",
+      "datasourceTemplate": "helm",
+      "registryUrlTemplate": "https://traefik.github.io/charts"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^src/app/tadoss/release\\.json$/"
+      ],
+      "matchStrings": [
+        "\"cert-manager\":\\s*\"(?<currentValue>[^\"\\s]+)\""
+      ],
+      "depNameTemplate": "cert-manager",
+      "datasourceTemplate": "helm",
+      "registryUrlTemplate": "https://charts.jetstack.io"
     }
+  ],
+  "ignorePaths": [
+    "**/node_modules/**",
+    "**/bower_components/**",
+    "**/vendor/**",
+    ".local/**",
+    "src/.venv/**",
+    "operator/bin/**",
+    "reports/**"
   ]
 }

@@ -7,85 +7,101 @@ metadata:
     test.tadoss.io/tier: standard
 spec:
   catch:
-    - describe:
-        apiVersion: tadoss.livewyer.io/v1alpha1
-        kind: Tadoss
-    - get:
-        apiVersion: batch/v1
-        kind: Job
-    - events: {}
-    - podLogs:
-        selector: app.kubernetes.io/name=tadoss
-        tail: 100
-    - podLogs:
-        namespace: tadoss-system
-        selector: app.kubernetes.io/name=tadoss-operator
-        tail: 100
+  - describe:
+      apiVersion: tadoss.livewyer.io/v1alpha1
+      kind: Tadoss
+  - get:
+      apiVersion: batch/v1
+      kind: Job
+  - events: {}
+  - podLogs:
+      selector: app.kubernetes.io/name=tadoss
+      tail: 100
+  - podLogs:
+      namespace: tadoss-system
+      selector: app.kubernetes.io/name=tadoss-operator
+      tail: 100
   steps:
-    - name: protected-instance-retains-database
-      try:
-        - apply:
-            resource:
-              apiVersion: tadoss.livewyer.io/v1alpha1
-              kind: Tadoss
-              metadata:
-                name: protected
-              spec:
-                image: ($values.apiImage)
-                deletionProtection: true
-                deletionPolicy: Retain
-        - assert:
-            resource:
-              apiVersion: tadoss.livewyer.io/v1alpha1
-              kind: Tadoss
-              metadata:
-                name: protected
-              status:
-                phase: Ready
-        - delete:
-            ref:
-              apiVersion: tadoss.livewyer.io/v1alpha1
-              kind: Tadoss
-              name: protected
-            expect:
-              - check:
-                  ($error != null): true
-        - assert:
-            resource:
-              apiVersion: tadoss.livewyer.io/v1alpha1
-              kind: Tadoss
-              metadata:
-                name: protected
-                (deletionTimestamp == null): true
-        - patch:
-            resource:
-              apiVersion: tadoss.livewyer.io/v1alpha1
-              kind: Tadoss
-              metadata:
-                name: protected
-                namespace: ($namespace)
-              spec:
-                deletionProtection: false
-        - delete:
-            ref:
-              apiVersion: tadoss.livewyer.io/v1alpha1
-              kind: Tadoss
-              name: protected
-        - assert:
-            resource:
-              apiVersion: postgresql.cnpg.io/v1
-              kind: Cluster
-              metadata:
-                name: protected-db
-                (ownerReferences == null || length(ownerReferences) == `0`): true
-              status:
-                readyInstances: 1
-        - assert:
-            resource:
-              apiVersion: v1
-              kind: PersistentVolumeClaim
-              metadata:
-                labels:
-                  cnpg.io/cluster: protected-db
-              status:
-                phase: Bound
+  - name: protected-instance-retains-database
+    try:
+    - apply:
+        resource:
+          apiVersion: tadoss.livewyer.io/v1alpha1
+          kind: Tadoss
+          metadata:
+            name: protected
+          spec:
+            profile: local-kind
+            deletionProtection: true
+            deletionPolicy: Retain
+            version: 0.1.0
+            api:
+              image: ($values.apiImage)
+    - assert:
+        resource:
+          apiVersion: tadoss.livewyer.io/v1alpha1
+          kind: Tadoss
+          metadata:
+            name: protected
+          status:
+            phase: Ready
+    - delete:
+        ref:
+          apiVersion: tadoss.livewyer.io/v1alpha1
+          kind: Tadoss
+          name: protected
+        expect:
+        - check:
+            ($error != null): true
+    - assert:
+        resource:
+          apiVersion: tadoss.livewyer.io/v1alpha1
+          kind: Tadoss
+          metadata:
+            name: protected
+            (deletionTimestamp == null): true
+    - patch:
+        resource:
+          apiVersion: tadoss.livewyer.io/v1alpha1
+          kind: Tadoss
+          metadata:
+            name: protected
+            namespace: ($namespace)
+          spec:
+            deletionProtection: false
+    - delete:
+        ref:
+          apiVersion: tadoss.livewyer.io/v1alpha1
+          kind: Tadoss
+          name: protected
+    - assert:
+        resource:
+          apiVersion: postgresql.cnpg.io/v1
+          kind: Cluster
+          metadata:
+            name: protected-db
+            (ownerReferences == null || length(ownerReferences) == `0`): true
+          status:
+            readyInstances: 1
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            labels:
+              cnpg.io/cluster: protected-db
+          status:
+            phase: Bound
+  - name: stop-retained-fixture-before-namespace-cleanup
+    try:
+    - delete:
+        ref:
+          apiVersion: postgresql.cnpg.io/v1
+          kind: Cluster
+          name: protected-db
+    - wait:
+        apiVersion: v1
+        kind: Pod
+        selector: cnpg.io/cluster=protected-db
+        for:
+          deletion: {}

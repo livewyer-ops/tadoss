@@ -2,10 +2,12 @@ package controller
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,6 +26,11 @@ import (
 // live is the client of a manager running against an envtest API server; nil when
 // KUBEBUILDER_ASSETS is unset, in which case the reconcile tests skip themselves.
 var live client.Client
+var fullDataLists atomic.Int64
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
 func TestMain(m *testing.M) {
 	if os.Getenv("KUBEBUILDER_ASSETS") == "" {
@@ -44,11 +51,19 @@ func TestMain(m *testing.M) {
 			panic(err)
 		}
 	}
+	cfg.WrapTransport = func(next http.RoundTripper) http.RoundTripper {
+		return roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Method == http.MethodGet && (strings.HasSuffix(req.URL.Path, "/configmaps") || strings.HasSuffix(req.URL.Path, "/secrets")) && !strings.Contains(req.Header.Get("Accept"), "as=PartialObjectMetadata") {
+				fullDataLists.Add(1)
+			}
+			return next.RoundTrip(req)
+		})
+	}
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsserver.Options{BindAddress: "0"},
 		HealthProbeBindAddress: "0",
-		Client:                 client.Options{Cache: &client.CacheOptions{DisableFor: []client.Object{&corev1.Secret{}}}},
+		Client:                 client.Options{Cache: &client.CacheOptions{DisableFor: []client.Object{&corev1.Secret{}, &corev1.ConfigMap{}}}},
 	})
 	if err != nil {
 		panic(err)

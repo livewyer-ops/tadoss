@@ -1,0 +1,4 @@
+profile: local-kind
+baseDomain: tadoss.localtest.me
+ingressClassName: traefik
+clusterIssuer: tadoss-selfsigned

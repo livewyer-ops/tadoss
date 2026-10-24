@@ -57,7 +57,9 @@ def main():
     revision = subprocess.check_output(  # noqa: S603  fixed argv, no shell
         [git, "-C", str(source), "rev-parse", "HEAD"], text=True
     ).strip()
-    destination = Path(__file__).resolve().parents[1] / "tadoss" / "contract"
+    destination = (
+        Path(__file__).resolve().parents[1] / "src" / "app" / "tadoss" / "contract"
+    )
     spec = bundle(source, destination, revision)
     print(f"Bundled BBC TADS {spec['info']['version']} at {revision}")
 

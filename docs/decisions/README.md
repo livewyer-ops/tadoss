@@ -6,6 +6,8 @@ a later record supersedes an earlier one.
 
 | Record | Decision |
 | --- | --- |
-| [0001](0001-helmfile-orchestrates-deployment.md) | Helmfile orchestrates the whole deployment |
+| [0001](0001-helmfile-orchestrates-deployment.md) | Helmfile orchestrates deployment; composition superseded by 0004 |
 | [0002](0002-event-timeranges-as-postgresql-ranges.md) | Event timeranges are stored as PostgreSQL ranges |
-| [0003](0003-deletion-protection-yields-to-namespace-deletion.md) | Deletion protection yields to namespace deletion |
+| [0003](0003-deletion-protection-yields-to-namespace-deletion.md) | Deletion protection yields to namespace deletion; Retain extended by 0005 |
+| [0004](0004-separate-platform-operator-and-instances.md) | Separate platform, operator and instance deployment |
+| [0005](0005-retain-database-backup-schedules.md) | Retain the database and its backup schedule |

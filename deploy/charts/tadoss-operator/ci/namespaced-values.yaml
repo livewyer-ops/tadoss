@@ -1,3 +1,0 @@
-watchNamespaces: [tads, media]
-imagePullSecrets:
-  - name: registry

@@ -2,6 +2,7 @@ import base64
 import copy
 import json
 import os
+import re
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
@@ -14,17 +15,27 @@ from fastapi.testclient import TestClient
 from psycopg import connect, sql
 from psycopg.conninfo import make_conninfo
 from psycopg.types.json import Jsonb
-
-from tadoss import store
-from tadoss.api import HANDLERS, create_app, env_flag, resolve
-from tadoss.store import DEFAULT_DATABASE
-from tadoss.validation import (
+from tadoss.adapters import postgres as store
+from tadoss.adapters.postgres import DEFAULT_DATABASE
+from tadoss.api import create_app as runtime_app
+from tadoss.api.http import resolve
+from tadoss.api.routes import HANDLERS
+from tadoss.domain.validation import (
     SPEC,
     contract_schema,
     contract_validator,
     event_key,
     validate,
 )
+from tadoss.settings import Settings, env_flag
+
+
+def create_app(database=None, token=None, dev=None):
+    settings = Settings.load(
+        database=database, api_token=token, basic_auth_password=token, dev=dev
+    )
+    return runtime_app(settings=settings)
+
 
 SCHEMA_ID = "adb87970-b03a-4266-b5d8-f3f6541fb73a"
 TRACK_ID = "20992138-abdb-4daf-84f3-a0e07dabb5ca"
@@ -59,9 +70,11 @@ class StoreTests(unittest.TestCase):
 
         self.addCleanup(cleanup)
         self.database = make_conninfo(database, options=f"-c search_path={schema}")
+        with store.create_pool(self.database) as pool:
+            store.initialize(pool)
         self.app = create_app(self.database, token="test-secret")
         self.client = self.enterContext(TestClient(self.app))
-        self.client.headers["Authorization"] = "Bearer test-secret"
+        self.client.headers["Authorization"] = "Basic dGFkb3NzOnRlc3Qtc2VjcmV0"
         self.schema = {"id": SCHEMA_ID, "schema": copy.deepcopy(PAYLOAD_SCHEMA)}
         self.track = {
             "id": TRACK_ID,
@@ -79,6 +92,17 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(response.status_code, status, response.text)
         if status >= 400:
             validate(response.json(), contract_schema("error"))
+        elif response.content:
+            from tadoss.api.http import resolve
+
+            for template, operations in SPEC["paths"].items():
+                if re.fullmatch(re.sub(r"\{[^}]+\}", "[^/]+", template), path):
+                    definition = resolve(
+                        operations[method.lower()]["responses"][str(status)]
+                    )
+                    if content := definition.get("content", {}).get("application/json"):
+                        validate(response.json(), content["schema"])
+                    break
         return response
 
     def test_lifecycle_filters_and_persistence(self):
@@ -118,7 +142,8 @@ class StoreTests(unittest.TestCase):
             self.assertEqual(
                 len(
                     restarted.get(
-                        self.events, headers={"Authorization": "Bearer test-secret"}
+                        self.events,
+                        headers={"Authorization": "Basic dGFkb3NzOnRlc3Qtc2VjcmV0"},
                     ).json()
                 ),
                 1,
@@ -168,6 +193,59 @@ class StoreTests(unittest.TestCase):
             ],
             201,
         )
+
+    def test_database_errors_hide_messages_and_classify_transient_failures(self):
+        with (
+            patch.object(
+                store, "find", side_effect=psycopg.DataError("private database value")
+            ),
+            self.assertLogs("tadoss") as logs,
+        ):
+            response = self.send("GET", f"/tracks/{TRACK_ID}", status=500)
+        self.assertNotIn("private database value", str(logs.output) + response.text)
+        record = next(
+            record for record in logs.records if record.getMessage() == "Database error"
+        )
+        self.assertEqual(record.exception_type, "DataError")
+        self.assertIsNone(record.exc_info)
+        with patch.object(
+            store, "find", side_effect=psycopg.errors.QueryCanceled("private query")
+        ):
+            response = self.send("GET", f"/tracks/{TRACK_ID}", status=503)
+        self.assertEqual(response.headers["Retry-After"], "1")
+        self.assertIn("temporarily failed", response.text)
+        self.assertNotIn("private query", response.text)
+
+    def test_batch_ownership_prefetch_preserves_partial_success_and_duplicates(self):
+        for editable in (True, False):
+            self.send(
+                "PUT", f"/tracks/{TRACK_ID}/editable_events", editable, status=204
+            )
+            identifier = str(uuid4())
+            batch = [
+                event(id=identifier),
+                event(id=identifier),
+                event(id="bad\x00id"),
+                event(id="bad\ud800id"),
+                event(id=123),
+                event(),
+            ]
+            # Escapes let invalid scalars reach per-record validation.
+            with patch.object(
+                store,
+                "event",
+                side_effect=AssertionError("per-record ownership lookup"),
+            ):
+                response = self.client.post(
+                    self.events,
+                    content=json.dumps(batch),
+                    headers={"Content-Type": "application/json"},
+                )
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(
+                [r["http_status_code"] for r in response.json()["responses"]],
+                [201, 200 if editable else 403, 400, 400, 400, 201],
+            )
 
     def test_read_only_applies_to_all_mutations(self):
         self.send("POST", self.events, event())
@@ -364,7 +442,7 @@ class StoreTests(unittest.TestCase):
     def test_published_contract_matches_routes(self):
         contract = self.send("GET", "/openapi.json").json()
         self.assertEqual(contract["x-upstream-revision"], SPEC["x-upstream-revision"])
-        self.assertNotIn("/service/webhooks", contract["paths"])
+        self.assertIn("/service/webhooks", contract["paths"])
         self.assertEqual(set(contract["paths"]), set(HANDLERS))
         hits = contract_validator.cache_info().hits
         validate(str(uuid4()), contract_schema("uuid"))
@@ -413,11 +491,14 @@ class StoreTests(unittest.TestCase):
 
     def test_database_errors_are_tads_errors(self):
         with (
-            patch("tadoss.store.listing", side_effect=psycopg.ProgrammingError("x")),
+            patch(
+                "tadoss.adapters.postgres.listing",
+                side_effect=psycopg.ProgrammingError("x"),
+            ),
             self.assertLogs("tadoss", "ERROR"),
         ):
             response = TestClient(self.app, raise_server_exceptions=False).get(
-                "/tracks", headers={"Authorization": "Bearer test-secret"}
+                "/tracks", headers={"Authorization": "Basic dGFkb3NzOnRlc3Qtc2VjcmV0"}
             )
         self.assertEqual(response.status_code, 500)
         validate(response.json(), contract_schema("error"))
@@ -441,7 +522,8 @@ class StoreTests(unittest.TestCase):
             held = app.state.pool.getconn()
             try:
                 response = client.get(
-                    "/tracks", headers={"Authorization": "Bearer test-secret"}
+                    "/tracks",
+                    headers={"Authorization": "Basic dGFkb3NzOnRlc3Qtc2VjcmV0"},
                 )
             finally:
                 app.state.pool.putconn(held)
@@ -475,6 +557,17 @@ class StoreTests(unittest.TestCase):
         with TestClient(app) as client:
             self.assertEqual(client.get("/healthz").status_code, 200)
 
+    def test_unhandled_error_keeps_request_id(self):
+        with patch(
+            "tadoss.adapters.postgres.listing", side_effect=RuntimeError("unexpected")
+        ):
+            client = TestClient(self.app, raise_server_exceptions=False)
+            response = client.get("/tracks", headers=dict(self.client.headers))
+            client.close()
+        self.assertEqual(response.status_code, 500)
+        self.assertTrue(UUID(response.headers["X-Request-ID"]))
+        validate(response.json(), contract_schema("error"))
+
     def test_schema_timestamps(self):
         sid = str(uuid4())
         self.send("PUT", f"/schemas/{sid}", {"id": sid, "schema": {}}, status=201)
@@ -486,9 +579,9 @@ class StoreTests(unittest.TestCase):
             app = create_app(self.database, token="", dev=True)
         with TestClient(app) as client:
             self.assertEqual(client.get("/tracks").status_code, 200)
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             create_app(self.database, token="", dev=False)
-        with patch.dict(os.environ), self.assertRaises(RuntimeError):
+        with patch.dict(os.environ), self.assertRaises(ValueError):
             os.environ.pop("TADOSS_DATABASE", None)
             os.environ.pop("TADOSS_DEV", None)
             create_app(None, token="t")
@@ -611,7 +704,7 @@ class StoreTests(unittest.TestCase):
             len(self.send("GET", self.events, params={"timerange": largest}).json()), 2
         )
 
-    def test_migration_from_version_one(self):
+    def test_populated_migration_and_retry(self):
         database = os.getenv("TADOSS_TEST_DATABASE", DEFAULT_DATABASE)
         schema = "legacy_" + uuid4().hex
         with connect(database) as connection:
@@ -630,14 +723,15 @@ class StoreTests(unittest.TestCase):
         identifier = str(uuid4())
         with connect(conninfo) as connection:
             connection.execute(
-                "CREATE TABLE tadoss_version (version INTEGER PRIMARY KEY);"
+                "CREATE TABLE tadoss_migrations (name text PRIMARY KEY, applied "
+                "timestamptz DEFAULT now());"
                 "CREATE TABLE schemas (id TEXT PRIMARY KEY, document JSONB NOT NULL);"
                 "CREATE TABLE tracks (id TEXT PRIMARY KEY, schema_id TEXT NOT NULL"
                 " REFERENCES schemas(id), document JSONB NOT NULL);"
                 "CREATE TABLE events (id TEXT PRIMARY KEY, track_id TEXT NOT NULL"
                 " REFERENCES tracks(id) ON DELETE CASCADE, document JSONB NOT NULL);"
                 "CREATE INDEX events_track ON events(track_id);"
-                "INSERT INTO tadoss_version VALUES (1)"
+                "INSERT INTO tadoss_migrations (name) VALUES ('0001_initial')"
             )
             connection.execute(
                 "INSERT INTO schemas VALUES (%s, %s)",
@@ -655,9 +749,8 @@ class StoreTests(unittest.TestCase):
                     Jsonb({**event("[1:0_2:0)", id=identifier), "track_id": TRACK_ID}),
                 ),
             )
-        with patch.dict(os.environ, {"TADOSS_AUTO_MIGRATE": "false"}):
-            app = create_app(conninfo, token="t")
-        headers = {"Authorization": "Bearer t"}
+        app = create_app(conninfo, token="t")
+        headers = {"Authorization": "Basic dGFkb3NzOnQ="}
         with TestClient(app) as client:
             self.assertEqual(client.get("/readyz").json()["reason"], "schema")
             store.initialize(app.state.pool)
@@ -683,7 +776,7 @@ class StoreTests(unittest.TestCase):
                         "SELECT name FROM tadoss_migrations ORDER BY name"
                     )
                 ],
-                ["0001_initial", "0002_event_ranges"],
+                ["0001_initial", "0002_event_ranges", "0003_background"],
             )
 
     def test_schema_listing_filters_and_paging(self):
@@ -741,15 +834,68 @@ class StoreTests(unittest.TestCase):
         )
 
     def test_docs_can_be_disabled(self):
-        with patch.dict(
-            os.environ, {"TADOSS_DOCS": "false", "TADOSS_AUTO_MIGRATE": "false"}
-        ):
+        with patch.dict(os.environ, {"TADOSS_DOCS": "false"}):
             app = create_app(self.database, token="test-secret")
         with TestClient(app) as client:
             self.assertEqual(client.get("/docs").status_code, 404)
             self.assertEqual(client.get("/openapi.json").status_code, 200)
         with TestClient(self.app) as client:
             self.assertEqual(client.get("/docs").status_code, 200)
+
+    def test_read_only_tag_cannot_unlock(self):
+        self.send("PUT", f"/tracks/{TRACK_ID}/tags/read_only", "tag", status=204)
+        self.send("PUT", f"/tracks/{TRACK_ID}/read_only", True, status=204)
+        self.send("PUT", f"/tracks/{TRACK_ID}/tags/read_only", "changed", status=403)
+        self.send("DELETE", f"/tracks/{TRACK_ID}/tags/read_only", status=403)
+        self.send("PUT", f"/tracks/{TRACK_ID}/read_only", False, status=204)
+
+    def test_json_equality_distinguishes_booleans(self):
+        sid = str(uuid4())
+        body = {"id": sid, "schema": {"const": True}}
+        self.send("PUT", f"/schemas/{sid}", body, status=201)
+        self.send(
+            "PUT", f"/schemas/{sid}", {**body, "schema": {"const": 1}}, status=403
+        )
+        original = self.send("GET", f"/tracks/{TRACK_ID}").json()
+        self.send(
+            "PUT", f"/tracks/{TRACK_ID}", {**original, "extension": True}, status=204
+        )
+        before = self.send("GET", f"/tracks/{TRACK_ID}").json()
+        self.send("PUT", f"/tracks/{TRACK_ID}", {**before, "extension": 1}, status=204)
+        after = self.send("GET", f"/tracks/{TRACK_ID}").json()
+        self.assertNotEqual(before["metadata_version"], after["metadata_version"])
+
+    def test_storage_errors_preserve_valid_batch_members(self):
+        for text in ("bad\0", "bad\ud800"):
+            body = [event(), event(payload={"text": text}), event(id=123), event()]
+            response = self.client.post(
+                self.events,
+                content=json.dumps(body),
+                headers={"Content-Type": "application/json"},
+            )
+            self.assertEqual(response.status_code, 200)
+            result = response.json()
+            validate(result, contract_schema("track-event-post-responses"))
+            self.assertEqual(
+                [r["http_status_code"] for r in result["responses"]],
+                [201, 400, 400, 201],
+            )
+        self.assertEqual(len(self.send("GET", self.events).json()), 4)
+
+    def test_collection_cursor_survives_anchor_deletion(self):
+        for value in (1, 2, 3):
+            sid = str(UUID(f"00000000-0000-4000-8000-{value:012d}"))
+            self.send("PUT", f"/schemas/{sid}", {"id": sid, "schema": {}}, status=201)
+        first = self.send("GET", "/schemas", params={"limit": 1})
+        self.send("DELETE", "/schemas/" + first.json()[0]["id"], status=204)
+        second = self.send(
+            "GET",
+            "/schemas",
+            params={"limit": 1, "page": first.headers["X-Paging-NextKey"]},
+        )
+        self.assertEqual(
+            second.json()[0]["id"], str(UUID("00000000-0000-4000-8000-000000000002"))
+        )
 
 
 class ConfigTests(unittest.TestCase):
@@ -771,14 +917,14 @@ class ConfigTests(unittest.TestCase):
                 os.environ["TADOSS_FLAG"] = value
                 self.assertIs(env_flag("TADOSS_FLAG", None), expected, value)
             os.environ["TADOSS_FLAG"] = "maybe"
-            with self.assertRaises(RuntimeError):
+            with self.assertRaises(ValueError):
                 env_flag("TADOSS_FLAG", True)
 
     def test_discovery_without_database(self):
-        settings = {"TADOSS_AUTO_MIGRATE": "false", "TADOSS_POOL_TIMEOUT": "0.5"}
+        settings = {"TADOSS_POOL_TIMEOUT": "0.5"}
         with patch.dict(os.environ, settings):
             app = create_app("postgresql://x@127.0.0.1:1/x", token="t")
-        headers = {"Authorization": "Bearer t"}
+        headers = {"Authorization": "Basic dGFkb3NzOnQ="}
         with TestClient(app) as client:
             self.assertEqual(
                 client.get("/", headers=headers).json(),
@@ -786,7 +932,7 @@ class ConfigTests(unittest.TestCase):
             )
             self.assertEqual(client.get("/service", headers=headers).status_code, 200)
             missing = client.get(f"/track-delete-requests/{uuid4()}", headers=headers)
-            self.assertEqual(missing.status_code, 404)
+            self.assertEqual(missing.status_code, 503)
             validate(missing.json(), contract_schema("error"))
             unavailable = client.get("/tracks", headers=headers)
             self.assertEqual(unavailable.status_code, 503)

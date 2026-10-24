@@ -5,12 +5,16 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"reflect"
+	"slices"
 	"time"
 
 	cnpgv1 "github.com/cloudnative-pg/cloudnative-pg/api/v1"
 	tadossv1 "github.com/livewyer-ops/tadoss/operator/api/v1alpha1"
+	"github.com/livewyer-ops/tadoss/operator/internal/controller/defaults"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -42,6 +46,7 @@ type TadossReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder events.EventRecorder
+	Defaults defaults.Installation
 }
 
 // Owned resources are removed by garbage collection, so delete is granted only where the
@@ -59,7 +64,9 @@ type TadossReconciler struct {
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=postgresql.cnpg.io,resources=clusters,verbs=get;list;watch;create;patch
+// +kubebuilder:rbac:groups=postgresql.cnpg.io,resources=clusters;scheduledbackups,verbs=get;list;watch;create;patch;delete
+// +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;patch;delete
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 
 // Reconcile drives an instance towards its spec and records the outcome in its status.
 func (r *TadossReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -70,10 +77,16 @@ func (r *TadossReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if !t.DeletionTimestamp.IsZero() {
 		return r.handleDeletion(ctx, t)
 	}
+	if t.Spec.Paused {
+		return ctrl.Result{}, r.status(ctx, t, tadossv1.PhaseProgressing, "Paused", "Reconciliation is paused", false)
+	}
 	if !controllerutil.ContainsFinalizer(t, finalizer) {
 		before := t.DeepCopy()
 		controllerutil.AddFinalizer(t, finalizer)
 		return ctrl.Result{}, r.Patch(ctx, t, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{}))
+	}
+	if err := defaults.Resolve(t, r.Defaults); err != nil {
+		return ctrl.Result{}, r.status(ctx, t, tadossv1.PhaseError, "ConfigurationInvalid", err.Error(), false)
 	}
 	result, err := r.reconcile(ctx, t)
 	if err != nil {
@@ -86,27 +99,49 @@ func (r *TadossReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 }
 
 func (r *TadossReconciler) reconcile(ctx context.Context, t *tadossv1.Tadoss) (ctrl.Result, error) {
-	databaseSecret := t.Spec.Database.ExistingSecret
-	if t.Spec.Database.Provider == tadossv1.ProviderManaged {
+	for _, condition := range []string{"DatabaseReady", "SchemaMigrated", "APIReady", "WorkerReady"} {
+		if meta.FindStatusCondition(t.Status.Conditions, condition) == nil {
+			setCondition(t, condition, false, "Pending", "Waiting for reconciliation")
+		}
+	}
+	databaseSecret := t.Spec.Backends.DB.External.ExistingSecret
+	if t.Spec.Backends.DB.ProvidedBy == tadossv1.ProviderManaged {
 		cluster := databaseCluster(t)
+		live := &cnpgv1.Cluster{}
+		if err := r.Get(ctx, client.ObjectKeyFromObject(cluster), live); err == nil && !equality.Semantic.DeepDerivative(cluster.Spec.Bootstrap, live.Spec.Bootstrap) {
+			return ctrl.Result{}, r.status(ctx, t, tadossv1.PhaseError, "RestoreRequiresNewInstance", "Database bootstrap configuration requires a new instance", false)
+		}
 		if err := r.apply(ctx, t, cluster); err != nil {
 			return ctrl.Result{}, err
 		}
+		if t.Spec.Backends.DB.CNPG.Backup.Enabled {
+			backup := &cnpgv1.ScheduledBackup{TypeMeta: metav1.TypeMeta{APIVersion: "postgresql.cnpg.io/v1", Kind: "ScheduledBackup"}, ObjectMeta: metadata(t, "-backup"), Spec: cnpgv1.ScheduledBackupSpec{Schedule: t.Spec.Backends.DB.CNPG.Backup.Schedule, Cluster: cnpgv1.LocalObjectReference{Name: cluster.Name}, BackupOwnerReference: "none"}}
+			if err := r.apply(ctx, t, backup); err != nil {
+				return ctrl.Result{}, err
+			}
+			setCondition(t, "BackupPolicyReady", cluster.Status.LastSuccessfulBackup != "", "BackupState", "CNPG must report a successful backup; restore requires separate verification") //nolint:staticcheck // Pinned native Barman integration populates this field.
+		} else {
+			setCondition(t, "BackupPolicyReady", false, "NotConfigured", "Managed backups are not configured")
+		}
 		databaseSecret = t.Name + suffixDBApp
 		if cluster.Status.ReadyInstances < databaseInstances(t) {
+			setCondition(t, "DatabaseReady", false, "DatabasePending", "Waiting for PostgreSQL")
 			return r.pending(ctx, t, "DatabasePending", "Waiting for PostgreSQL")
 		}
 	}
 	database := &corev1.Secret{}
 	if err := r.Get(ctx, client.ObjectKey{Namespace: t.Namespace, Name: databaseSecret}, database); err != nil {
 		if apierrors.IsNotFound(err) {
+			setCondition(t, "DatabaseReady", false, "DatabaseSecretMissing", "Waiting for the database Secret")
 			return r.pending(ctx, t, "DatabaseSecretMissing", "Waiting for the database Secret")
 		}
 		return ctrl.Result{}, err
 	}
 	if len(database.Data["uri"]) == 0 {
+		setCondition(t, "DatabaseReady", false, "DatabaseSecretInvalid", "Database Secret must contain uri")
 		return r.pending(ctx, t, "DatabaseSecretInvalid", "Database Secret must contain uri")
 	}
+	setCondition(t, "DatabaseReady", true, "Available", "Database credentials are available")
 	token, err := r.token(ctx, t)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
@@ -118,9 +153,50 @@ func (r *TadossReconciler) reconcile(ctx context.Context, t *tadossv1.Tadoss) (c
 		return r.pending(ctx, t, "TokenSecretInvalid", "Token Secret must contain token")
 	}
 	t.Status.DatabaseSecret, t.Status.TokenSecret = database.Name, token.Name
-	databaseHash := fmt.Sprintf("%x", sha256.Sum256(database.Data["uri"]))
-	checksum := fmt.Sprintf("%x", sha256.Sum256(append(append([]byte(databaseHash), 0), token.Data["token"]...)))
-	job := schemaJob(t, database.Name, databaseHash)
+	databaseReferences := []client.Object{database}
+	credentialReferences := []client.Object{database, token}
+	for _, name := range referencedSecrets(t) {
+		if name == "" || name == database.Name || name == token.Name {
+			continue
+		}
+		secret := &corev1.Secret{}
+		if err := r.Get(ctx, client.ObjectKey{Namespace: t.Namespace, Name: name}, secret); err != nil {
+			return r.pending(ctx, t, "ReferencedSecretMissing", "A referenced Secret is unavailable")
+		}
+		if name == t.Spec.Auth.BasicSecret && (len(secret.Data["username"]) == 0 || len(secret.Data["password"]) == 0) {
+			return r.pending(ctx, t, "BasicSecretInvalid", "Basic Secret requires username and password")
+		}
+		credentialReferences = append(credentialReferences, secret)
+	}
+	if t.Spec.Backends.DB.ProvidedBy == tadossv1.ProviderManaged {
+		ca := &corev1.Secret{}
+		if err := r.Get(ctx, client.ObjectKey{Namespace: t.Namespace, Name: t.Name + suffixDBCA}, ca); err != nil {
+			setCondition(t, "DatabaseReady", false, "DatabaseCAMissing", "Waiting for the managed database CA Secret")
+			return r.pending(ctx, t, "DatabaseCAMissing", "Waiting for the managed database CA Secret")
+		}
+		if len(ca.Data["ca.crt"]) == 0 {
+			setCondition(t, "DatabaseReady", false, "DatabaseCAInvalid", "Database CA Secret must contain ca.crt")
+			return r.pending(ctx, t, "DatabaseCAInvalid", "Database CA Secret must contain ca.crt")
+		}
+		databaseReferences = append(databaseReferences, ca)
+		credentialReferences = append(credentialReferences, ca)
+	} else if ca := t.Spec.Backends.DB.External.CAConfigMap; ca != nil {
+		config := &corev1.ConfigMap{}
+		if err := r.Get(ctx, client.ObjectKey{Namespace: t.Namespace, Name: ca.Name}, config); err != nil {
+			setCondition(t, "DatabaseReady", false, "DatabaseCAMissing", "Database CA ConfigMap is unavailable")
+			return r.pending(ctx, t, "DatabaseCAMissing", "Database CA ConfigMap is unavailable")
+		}
+		if config.Data[ca.Key] == "" {
+			setCondition(t, "DatabaseReady", false, "DatabaseCAInvalid", "Database CA key is empty")
+			return r.pending(ctx, t, "DatabaseCAInvalid", "Database CA key is empty")
+		}
+		databaseReferences = append(databaseReferences, config)
+		credentialReferences = append(credentialReferences, config)
+	}
+	job := schemaJob(t, database.Name, referenceFingerprint(databaseReferences...))
+	if t.Status.SchemaJob != job.Name {
+		setCondition(t, "SchemaMigrated", false, "SchemaPending", "Waiting for selected schema Job")
+	}
 	t.Status.SchemaJob = job.Name
 	liveJob := &batchv1.Job{}
 	err = r.Get(ctx, client.ObjectKeyFromObject(job), liveJob)
@@ -142,7 +218,7 @@ func (r *TadossReconciler) reconcile(ctx context.Context, t *tadossv1.Tadoss) (c
 	complete := false
 	for _, condition := range liveJob.Status.Conditions {
 		if condition.Type == batchv1.JobFailed && condition.Status == corev1.ConditionTrue {
-			return ctrl.Result{}, r.status(ctx, t, tadossv1.PhaseError, "SchemaFailed", "Schema Job failed; fix the cause and delete the failed Job to retry", false)
+			return ctrl.Result{}, r.status(ctx, t, tadossv1.PhaseError, "SchemaFailed", "Schema Job failed; fix the cause and change spec.schemaRetryNonce to retry", false)
 		}
 		if condition.Type == batchv1.JobComplete && condition.Status == corev1.ConditionTrue {
 			complete = true
@@ -151,12 +227,8 @@ func (r *TadossReconciler) reconcile(ctx context.Context, t *tadossv1.Tadoss) (c
 	if !complete {
 		return r.pending(ctx, t, "SchemaPending", "Waiting for the schema Job")
 	}
-	set := workloads(t, database.Name, token.Name, checksum)
-	if waiting, err := r.migrateDeployment(ctx, t, set.Deployment); err != nil {
-		return ctrl.Result{}, err
-	} else if waiting {
-		return r.pending(ctx, t, "SelectorMigration", "Recreating the API Deployment with a UID-free selector")
-	}
+	setCondition(t, "SchemaMigrated", true, "Complete", "Database schema matches the selected release")
+	set := workloads(t, database.Name, token.Name, referenceFingerprint(credentialReferences...))
 	for _, object := range set.objects() {
 		if err := r.apply(ctx, t, object); err != nil {
 			return ctrl.Result{}, err
@@ -175,10 +247,16 @@ func (r *TadossReconciler) reconcile(ctx context.Context, t *tadossv1.Tadoss) (c
 		}
 		t.Status.Endpoint = scheme + "://" + t.Spec.Ingress.Host
 	}
-	ready := deployment.Status.ObservedGeneration >= deployment.Generation && deployment.Status.UpdatedReplicas == replicas(t) && deployment.Status.AvailableReplicas == replicas(t)
-	if !ready {
-		return r.pending(ctx, t, "RolloutPending", "Waiting for the API rollout")
+	apiReady := deploymentReady(deployment, replicas(t))
+	setCondition(t, "APIReady", apiReady, "Rollout", "API rollout must finish")
+	workerReady := deploymentReady(set.Worker, *set.Worker.Spec.Replicas)
+	t.Status.WorkerReadyReplicas = set.Worker.Status.ReadyReplicas
+	setCondition(t, "WorkerReady", workerReady, "Rollout", "Worker rollout must finish")
+	if !apiReady || !workerReady {
+		return r.pending(ctx, t, "RolloutPending", "Waiting for API and worker rollouts")
 	}
+	t.Status.CurrentVersion = t.Spec.Version
+	t.Status.AppliedDefaultsRevision = t.Status.Resolved.DefaultsRevision
 	if err := r.status(ctx, t, tadossv1.PhaseReady, "Available", "Database schema and API are ready", true); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -186,7 +264,7 @@ func (r *TadossReconciler) reconcile(ctx context.Context, t *tadossv1.Tadoss) (c
 }
 
 func (r *TadossReconciler) token(ctx context.Context, t *tadossv1.Tadoss) (*corev1.Secret, error) {
-	name := t.Spec.TokenSecret
+	name := t.Spec.Auth.TokenSecret
 	generated := name == ""
 	if generated {
 		name = t.Name + suffixToken
@@ -231,34 +309,6 @@ func randomToken() ([]byte, error) {
 	return []byte(base64.RawURLEncoding.EncodeToString(random)), nil
 }
 
-// migrateDeployment replaces a Deployment whose immutable selector still carries the
-// instance UID. Orphaning the ReplicaSet keeps the pods running; the recreated
-// Deployment adopts it because the pod template is unchanged.
-func (r *TadossReconciler) migrateDeployment(ctx context.Context, t *tadossv1.Tadoss, desired *appsv1.Deployment) (bool, error) {
-	live := &appsv1.Deployment{}
-	if err := r.Get(ctx, client.ObjectKeyFromObject(desired), live); err != nil {
-		return false, client.IgnoreNotFound(err)
-	}
-	if !metav1.IsControlledBy(live, t) {
-		return false, nil
-	}
-	if !live.DeletionTimestamp.IsZero() {
-		return true, nil
-	}
-	if live.Spec.Selector == nil {
-		return false, nil
-	}
-	if _, legacy := live.Spec.Selector.MatchLabels[instanceUID]; !legacy {
-		return false, nil
-	}
-	logf.FromContext(ctx).Info("recreating the API Deployment with a UID-free selector", "deployment", live.Name)
-	if r.Recorder != nil {
-		r.Recorder.Eventf(t, nil, corev1.EventTypeNormal, "SelectorMigration", "Reconcile", "Recreating Deployment %s with a UID-free selector; pods keep running", live.Name)
-	}
-	uid := live.UID
-	return true, r.Delete(ctx, live, client.PropagationPolicy(metav1.DeletePropagationOrphan), client.Preconditions{UID: &uid})
-}
-
 func (r *TadossReconciler) apply(ctx context.Context, t *tadossv1.Tadoss, desired client.Object) error {
 	empty, err := r.Scheme.New(desired.GetObjectKind().GroupVersionKind())
 	if err != nil {
@@ -290,12 +340,39 @@ func (r *TadossReconciler) prune(ctx context.Context, t *tadossv1.Tadoss, curren
 		}
 		stale = append(stale, ingress)
 	}
-	if replicas(t) == 1 {
+	if replicas(t) <= 1 && t.Spec.API.MinAvailable == nil {
 		budget, err := r.owned(ctx, t, key, &policyv1.PodDisruptionBudget{})
 		if err != nil {
 			return err
 		}
 		stale = append(stale, budget)
+	}
+	workerReplicas := replicas(t)
+	if t.Spec.Worker.ReplicaCount != nil {
+		workerReplicas = *t.Spec.Worker.ReplicaCount
+	}
+	if workerReplicas <= 1 && t.Spec.Worker.MinAvailable == nil {
+		budget, err := r.owned(ctx, t, client.ObjectKey{Namespace: t.Namespace, Name: t.Name + "-worker"}, &policyv1.PodDisruptionBudget{})
+		if err != nil {
+			return err
+		}
+		stale = append(stale, budget)
+	}
+	if !ptr.Deref(t.Spec.NetworkPolicy.Enabled, t.Spec.Profile == tadossv1.ProfileMultiServer) {
+		for _, component := range []string{"api", "worker"} {
+			policy, err := r.owned(ctx, t, client.ObjectKey{Namespace: t.Namespace, Name: t.Name + "-" + component}, &networkingv1.NetworkPolicy{})
+			if err != nil {
+				return err
+			}
+			stale = append(stale, policy)
+		}
+	}
+	if t.Spec.Backends.DB.ProvidedBy == tadossv1.ProviderManaged && !t.Spec.Backends.DB.CNPG.Backup.Enabled {
+		backup, err := r.owned(ctx, t, client.ObjectKey{Namespace: t.Namespace, Name: t.Name + "-backup"}, &cnpgv1.ScheduledBackup{})
+		if err != nil {
+			return err
+		}
+		stale = append(stale, backup)
 	}
 	jobs := &batchv1.JobList{}
 	if err := r.List(ctx, jobs, client.InNamespace(t.Namespace), client.MatchingLabels{instanceUID: string(t.UID)}); err != nil {
@@ -344,22 +421,25 @@ func (r *TadossReconciler) handleDeletion(ctx context.Context, t *tadossv1.Tados
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{RequeueAfter: time.Minute}, nil
-	case t.Spec.Database.Provider == tadossv1.ProviderManaged && t.Spec.DeletionPolicy == tadossv1.DeletionPolicyRetain:
-		cluster := &cnpgv1.Cluster{}
-		err := r.Get(ctx, client.ObjectKey{Namespace: t.Namespace, Name: t.Name + suffixDB}, cluster)
-		if err != nil && !apierrors.IsNotFound(err) {
-			return ctrl.Result{}, err
+	case t.Spec.Backends.DB.ProvidedBy == tadossv1.ProviderManaged && t.Spec.DeletionPolicy == tadossv1.DeletionPolicyRetain:
+		retained := []client.Object{
+			&cnpgv1.Cluster{ObjectMeta: metadata(t, suffixDB)},
+			&cnpgv1.ScheduledBackup{ObjectMeta: metadata(t, "-backup")},
 		}
-		if err == nil && metav1.IsControlledBy(cluster, t) {
-			before := cluster.DeepCopy()
-			owners := []metav1.OwnerReference{}
-			for _, owner := range cluster.OwnerReferences {
-				if owner.UID != t.UID {
-					owners = append(owners, owner)
+		for _, object := range retained {
+			if err := r.Get(ctx, client.ObjectKeyFromObject(object), object); err != nil {
+				if apierrors.IsNotFound(err) {
+					continue
 				}
+				return ctrl.Result{}, err
 			}
-			cluster.OwnerReferences = owners
-			if err := r.Patch(ctx, cluster, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
+			before := object.DeepCopyObject().(client.Object)
+			owners := slices.DeleteFunc(slices.Clone(object.GetOwnerReferences()), func(owner metav1.OwnerReference) bool { return owner.UID == t.UID })
+			if len(owners) == len(object.GetOwnerReferences()) {
+				continue
+			}
+			object.SetOwnerReferences(owners)
+			if err := r.Patch(ctx, object, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
 				return ctrl.Result{}, err
 			}
 		}
@@ -430,11 +510,12 @@ func (r *TadossReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	terminating := builder.WithPredicates(predicate.NewPredicateFuncs(func(o client.Object) bool { return !o.GetDeletionTimestamp().IsZero() }))
 	b := ctrl.NewControllerManagedBy(mgr).For(&tadossv1.Tadoss{}).
 		Owns(&appsv1.Deployment{}).Owns(&batchv1.Job{}).Owns(&corev1.Service{}).
-		Owns(&networkingv1.Ingress{}).Owns(&policyv1.PodDisruptionBudget{}).
+		Owns(&networkingv1.Ingress{}).Owns(&networkingv1.NetworkPolicy{}).Owns(&policyv1.PodDisruptionBudget{}).
+		WatchesMetadata(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.secretRequests)).
 		WatchesMetadata(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.secretRequests)).
 		WatchesMetadata(&corev1.Namespace{}, handler.EnqueueRequestsFromMapFunc(r.namespaceRequests), terminating)
 	if _, err := mgr.GetRESTMapper().RESTMapping(cnpgv1.SchemeGroupVersion.WithKind("Cluster").GroupKind(), "v1"); err == nil {
-		b = b.Owns(&cnpgv1.Cluster{})
+		b = b.Owns(&cnpgv1.Cluster{}).Owns(&cnpgv1.ScheduledBackup{})
 	}
 	return b.Complete(r)
 }
@@ -459,9 +540,61 @@ func (r *TadossReconciler) secretRequests(ctx context.Context, object client.Obj
 	}
 	requests := []reconcile.Request{}
 	for _, t := range instances.Items {
-		if object.GetName() == t.Spec.TokenSecret || object.GetName() == t.Name+suffixToken || object.GetName() == t.Spec.Database.ExistingSecret || object.GetName() == t.Name+suffixDBApp {
+		names := append(referencedSecrets(&t), t.Name+suffixToken, t.Name+suffixDBApp, t.Name+suffixDBCA)
+		if ca := t.Spec.Backends.DB.External.CAConfigMap; ca != nil {
+			names = append(names, ca.Name)
+		}
+		if slices.Contains(names, object.GetName()) {
 			requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&t)})
 		}
+
 	}
 	return requests
+}
+
+func deploymentReady(deployment *appsv1.Deployment, desired int32) bool {
+	status := deployment.Status
+	return status.ObservedGeneration >= deployment.Generation && status.UpdatedReplicas == desired && status.AvailableReplicas == desired && status.Replicas == desired
+}
+
+func setCondition(t *tadossv1.Tadoss, name string, ready bool, reason, message string) {
+	status := metav1.ConditionFalse
+	if ready {
+		status = metav1.ConditionTrue
+	}
+	meta.SetStatusCondition(&t.Status.Conditions, metav1.Condition{Type: name, Status: status, Reason: reason, Message: message, ObservedGeneration: t.Generation})
+}
+
+func referencedSecrets(t *tadossv1.Tadoss) []string {
+	names := []string{t.Spec.Auth.TokenSecret, t.Spec.Auth.BasicSecret, t.Spec.Backends.DB.External.ExistingSecret}
+	for _, workload := range []tadossv1.WorkloadSpec{t.Spec.API, t.Spec.Worker} {
+		for _, source := range workload.EnvFrom {
+			if source.SecretRef != nil && !ptr.Deref(source.SecretRef.Optional, false) {
+				names = append(names, source.SecretRef.Name)
+			}
+		}
+		for _, volume := range workload.Volumes {
+			if volume.Secret != nil && !ptr.Deref(volume.Secret.Optional, false) {
+				names = append(names, volume.Secret.SecretName)
+			}
+		}
+	}
+	slices.Sort(names)
+	return slices.Compact(names)
+}
+
+// referenceFingerprint tracks API object revisions without hashing credential bytes.
+func referenceFingerprint(objects ...client.Object) string {
+	entries := make([]string, 0, len(objects))
+	for _, object := range objects {
+		kind := "Secret"
+		if _, ok := object.(*corev1.ConfigMap); ok {
+			kind = "ConfigMap"
+		}
+		encoded, _ := json.Marshal([]string{kind, object.GetNamespace(), object.GetName(), string(object.GetUID()), object.GetResourceVersion()})
+		entries = append(entries, string(encoded))
+	}
+	slices.Sort(entries)
+	encoded, _ := json.Marshal(slices.Compact(entries))
+	return fmt.Sprintf("%x", sha256.Sum256(encoded))
 }

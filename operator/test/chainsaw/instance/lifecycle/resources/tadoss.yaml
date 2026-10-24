@@ -3,7 +3,9 @@ kind: Tadoss
 metadata:
   name: journey
 spec:
-  image: ($values.apiImage)
   profile: local-kind
   deletionProtection: false
   deletionPolicy: Delete
+  version: 0.1.0
+  api:
+    image: ($values.apiImage)

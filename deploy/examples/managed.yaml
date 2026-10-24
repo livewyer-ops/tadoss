@@ -1,0 +1,67 @@
+# Create tads, the referenced Secrets, storage class and ClusterIssuer first.
+apiVersion: tadoss.livewyer.io/v1alpha1
+kind: Tadoss
+metadata:
+  name: archive
+  namespace: tads
+spec:
+  version: 0.1.0
+  profile: multi-server
+  deletionProtection: true
+  deletionPolicy: Retain
+  publicEndpoint:
+    baseDomain: tads.example.com
+  ingress:
+    className: traefik
+    clusterIssuer: production
+    tlsSecretName: archive-api-tls
+  auth:
+    tokenSecret: archive-api-token
+    basicSecret: archive-basic
+    oauth2:
+      issuer: https://identity.example.com/realms/archive
+      audience: tadoss
+      jwksURI: https://identity.example.com/realms/archive/protocol/openid-connect/certs
+      algorithms: [RS256]
+  api:
+    replicaCount: 2
+    resources:
+      requests: {cpu: 250m, memory: 256Mi}
+      limits: {cpu: '1', memory: 512Mi}
+    env:
+      TADOSS_DELETE_BATCH_SIZE: '1000'
+      TADOSS_DELETE_MAX_ATTEMPTS: '5'
+    minAvailable: 1
+  worker:
+    replicaCount: 2
+    resources:
+      requests: {cpu: 100m, memory: 128Mi}
+      limits: {cpu: '1', memory: 512Mi}
+    env:
+      TADOSS_DELETE_BATCH_SIZE: '1000'
+      TADOSS_DELETE_MAX_ATTEMPTS: '5'
+      TADOSS_WEBHOOK_TIMEOUT_SECONDS: '10'
+    minAvailable: 1
+  backends:
+    db:
+      providedBy: cnpg
+      cnpg:
+        instances: 3
+        storage: 50Gi
+        storageClass: fast
+        resources:
+          requests: {cpu: 500m, memory: 512Mi}
+          limits: {cpu: '2', memory: 2Gi}
+        backup:
+          enabled: true
+          schedule: '0 0 2 * * *'
+          retentionPolicy: 30d
+          objectStore:
+            destinationPath: s3://tadoss-backups/archive
+            s3Credentials:
+              accessKeyId: {name: backup-credentials, key: ACCESS_KEY_ID}
+              secretAccessKey: {name: backup-credentials, key: ACCESS_SECRET_KEY}
+            wal: {compression: gzip}
+            data: {compression: gzip}
+  networkPolicy:
+    enabled: true

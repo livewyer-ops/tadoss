@@ -6,6 +6,7 @@ data:
   check.py: |
     import json, os, sys, time
     from urllib.request import Request, urlopen
+    from urllib.parse import urlencode
     from urllib.error import HTTPError, URLError
     base = os.getenv('API_URL', 'http://journey-api:8000')
     token = os.environ['TADOSS_TOKEN']
@@ -29,7 +30,8 @@ data:
             return error.code
     def request(method, path, body=None):
         data = json.dumps(body).encode() if body is not None else None
-        headers = {'Authorization': 'Bearer '+token, 'Content-Type': 'application/json'}
+        headers = {'Content-Type': 'application/json'}
+        path += '?' + urlencode({'access_token':token})
         def call():
             with urlopen(Request(base+path, data, headers, method=method), timeout=10) as response:
                 payload = response.read()
@@ -37,8 +39,8 @@ data:
         return retry(call)
     if os.environ['MODE'] == 'auth':
         def rotated():
-            fresh = status('/tracks', {'Authorization': 'Bearer '+token})
-            stale = status('/tracks', {'Authorization': 'Bearer '+os.environ['OLD_TOKEN']})
+            fresh = status('/tracks?'+urlencode({'access_token':token}), {})
+            stale = status('/tracks?'+urlencode({'access_token':os.environ['OLD_TOKEN']}), {})
             assert (fresh, stale) == (200, 401), f'rotation still in progress: new={fresh} old={stale}'
         retry(rotated)
         print('Rotated token accepted, old token rejected')

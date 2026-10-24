@@ -12,11 +12,12 @@ base = os.getenv("TADOSS_URL", "http://127.0.0.1:8000").rstrip("/")
 if not base.startswith(("http://", "https://")):
     raise SystemExit("TADOSS_URL must be an http or https URL")
 headers = {"Content-Type": "application/json"}
-if token := os.getenv("TADOSS_TOKEN"):
-    headers["Authorization"] = f"Bearer {token}"
+token = os.getenv("TADOSS_API_TOKEN")
 
 
 def request(method, path, data=None):
+    if token:
+        path += ("&" if "?" in path else "?") + urlencode({"access_token": token})
     body = json.dumps(data).encode() if data is not None else None
     # The scheme is checked above, which is what the audit rule asks for.
     call = Request(base + path, body, headers, method=method)  # noqa: S310
@@ -25,7 +26,7 @@ def request(method, path, data=None):
             raw = response.read()
     except HTTPError as error:
         detail = error.read().decode(errors="replace")
-        print(f"{method} {path} failed with {error.code}: {detail}", file=sys.stderr)
+        print(f"{method} request failed with {error.code}: {detail}", file=sys.stderr)
         raise SystemExit(1) from error
     return json.loads(raw) if raw else None
 

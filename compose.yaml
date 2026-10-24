@@ -19,14 +19,14 @@ services:
     build: .
     image: livewyer/tadoss-api:0.1.0
     depends_on:
-      db:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     ports:
       - "127.0.0.1:8000:8000"
     environment:
       # Compose interpolates the whole file even for `up db`, so the token cannot be
-      # required here; the app exits with "Set TADOSS_TOKEN" when it is missing.
-      TADOSS_TOKEN: ${TADOSS_TOKEN:-}
+      # required here; the app exits with "Configure authentication" when it is missing.
+      TADOSS_API_TOKEN: ${TADOSS_API_TOKEN:-}
       TADOSS_DATABASE: postgresql://tadoss:tadoss@db:5432/tadoss
     read_only: true
     tmpfs:
@@ -36,6 +36,31 @@ services:
     security_opt:
       - no-new-privileges:true
     restart: on-failure:3
+  migrate:
+    profiles: [app]
+    build: .
+    image: livewyer/tadoss-api:0.1.0
+    command: [tadoss, migrate]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      TADOSS_DATABASE: postgresql://tadoss:tadoss@db:5432/tadoss
+  worker:
+    profiles: [app]
+    image: livewyer/tadoss-api:0.1.0
+    command: [tadoss, worker]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/readyz')"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      TADOSS_DATABASE: postgresql://tadoss:tadoss@db:5432/tadoss
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
 
 volumes:
   tadoss-postgres:

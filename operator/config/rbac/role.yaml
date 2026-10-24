@@ -7,6 +7,7 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - configmaps
   - namespaces
   verbs:
   - get
@@ -69,6 +70,7 @@ rules:
   - networking.k8s.io
   resources:
   - ingresses
+  - networkpolicies
   verbs:
   - create
   - delete
@@ -91,8 +93,10 @@ rules:
   - postgresql.cnpg.io
   resources:
   - clusters
+  - scheduledbackups
   verbs:
   - create
+  - delete
   - get
   - list
   - patch

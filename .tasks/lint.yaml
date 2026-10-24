@@ -1,0 +1,14 @@
+version: '3'
+tasks:
+  all:
+    cmds:
+      - uv run --project src --frozen ruff check --config src/pyproject.toml src/app tests scripts
+      - uv run --project src --frozen ruff format --config src/pyproject.toml --check src/app tests scripts
+      - cd src && uv run --frozen pyright
+      - actionlint
+  fmt:
+    desc: Format maintained Python and Go code
+    cmds:
+      - uv run --project src ruff check --config src/pyproject.toml --fix src/app tests scripts
+      - uv run --project src ruff format --config src/pyproject.toml src/app tests scripts
+      - gofmt -w operator/api operator/cmd operator/internal

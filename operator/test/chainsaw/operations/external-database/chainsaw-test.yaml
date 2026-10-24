@@ -2,143 +2,212 @@ apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:
   name: external-database-and-token-rotation
+  labels:
+    test.tadoss.io/domain: operations
+    test.tadoss.io/tier: standard
 spec:
   catch:
-    - describe:
-        apiVersion: tadoss.livewyer.io/v1alpha1
-        kind: Tadoss
-    - get:
-        apiVersion: batch/v1
-        kind: Job
-    - events: {}
-    - podLogs:
-        selector: app.kubernetes.io/name=tadoss
-        tail: 100
-    - podLogs:
-        namespace: tadoss-system
-        selector: app.kubernetes.io/name=tadoss-operator
-        tail: 100
+  - describe:
+      apiVersion: tadoss.livewyer.io/v1alpha1
+      kind: Tadoss
+  - get:
+      apiVersion: batch/v1
+      kind: Job
+  - events: {}
+  - podLogs:
+      selector: app.kubernetes.io/name=tadoss
+      tail: 100
+  - podLogs:
+      namespace: tadoss-system
+      selector: app.kubernetes.io/name=tadoss-operator
+      tail: 100
   steps:
-    - name: validate-and-wait-for-credentials
-      try:
-        - apply:
-            resource:
-              apiVersion: tadoss.livewyer.io/v1alpha1
-              kind: Tadoss
-              metadata:
-                name: invalid
-              spec:
-                database:
-                  provider: external
-            expect:
-              - check:
-                  ($error != null): true
-        - apply:
-            file: database.yaml
-        - assert:
-            resource:
-              apiVersion: postgresql.cnpg.io/v1
-              kind: Cluster
-              metadata:
-                name: external-db
-              status:
-                readyInstances: 1
-        - apply:
-            resource:
-              apiVersion: tadoss.livewyer.io/v1alpha1
-              kind: Tadoss
-              metadata:
-                name: external
-              spec:
-                image: ($values.apiImage)
-                replicas: 2
-                deletionProtection: false
-                database:
-                  provider: external
+  - name: validate-and-wait-for-credentials
+    try:
+    - apply:
+        resource:
+          apiVersion: tadoss.livewyer.io/v1alpha1
+          kind: Tadoss
+          metadata:
+            name: invalid
+          spec:
+            version: 0.1.0
+            backends:
+              db:
+                providedBy: external
+                external: {}
+        expect:
+        - check:
+            ($error != null): true
+    - apply:
+        file: database.yaml
+    - assert:
+        resource:
+          apiVersion: postgresql.cnpg.io/v1
+          kind: Cluster
+          metadata:
+            name: external-db
+          status:
+            readyInstances: 1
+    - &id001
+      script:
+        shell: bash
+        shellArgs:
+        - -c
+        env:
+        - name: INSTANCE_NAMESPACE
+          value: ($namespace)
+        content: |
+          set -euo pipefail
+          certificate=$(mktemp)
+          trap 'rm "$certificate"' EXIT
+          kubectl get secret external-db-ca -n "$INSTANCE_NAMESPACE" -o 'jsonpath={.data.ca\.crt}' | base64 --decode > "$certificate"
+          kubectl create configmap external-db-ca -n "$INSTANCE_NAMESPACE" --from-file=ca.crt="$certificate" --dry-run=client -o yaml | kubectl apply -f -
+    - apply:
+        resource:
+          apiVersion: tadoss.livewyer.io/v1alpha1
+          kind: Tadoss
+          metadata:
+            name: external
+          spec:
+            deletionProtection: false
+            version: 0.1.0
+            api:
+              image: ($values.apiImage)
+              replicaCount: 2
+              env:
+                TADOSS_MIGRATE_TIMEOUT: "5"
+            auth:
+              tokenSecret: custom-token
+            backends:
+              db:
+                providedBy: external
+                external:
                   existingSecret: external-db-app
-                tokenSecret: custom-token
-        - assert:
-            resource:
-              apiVersion: tadoss.livewyer.io/v1alpha1
-              kind: Tadoss
-              metadata:
-                name: external
-              status:
-                conditions:
-                  - type: Ready
-                    status: "False"
-                    reason: TokenSecretMissing
-        - apply:
-            resource:
-              apiVersion: v1
-              kind: Secret
-              metadata:
-                name: custom-token
-              stringData:
-                token: test-only-initial-token
-        - assert:
-            resource:
-              apiVersion: tadoss.livewyer.io/v1alpha1
-              kind: Tadoss
-              metadata:
-                name: external
-              status:
-                phase: Ready
-                readyReplicas: 2
-                databaseSecret: external-db-app
-                tokenSecret: custom-token
-    - name: rotate-and-verify
-      try:
-        - patch:
-            resource:
-              apiVersion: v1
-              kind: Secret
-              metadata:
-                name: custom-token
-                namespace: ($namespace)
-              stringData:
-                token: test-only-rotated-token
-        - assert:
-            resource:
-              apiVersion: apps/v1
-              kind: Deployment
-              metadata:
-                name: external-api
-              (status.observedGeneration == metadata.generation): true
-              (metadata.generation >= `2`): true
-              status:
-                updatedReplicas: 2
-                availableReplicas: 2
-        - apply:
-            file: ../../fixtures/api-check.yaml
-        - apply:
-            file: auth-check.yaml
-        - assert:
-            resource:
-              apiVersion: batch/v1
-              kind: Job
-              metadata:
-                name: check-rotated-token
-              status:
-                succeeded: 1
-        - delete:
-            ref:
-              apiVersion: tadoss.livewyer.io/v1alpha1
-              kind: Tadoss
-              name: external
-        - assert:
-            resource:
-              apiVersion: postgresql.cnpg.io/v1
-              kind: Cluster
-              metadata:
-                name: external-db
-                (ownerReferences == null || length(ownerReferences) == `0`): true
-              status:
-                readyInstances: 1
-        - assert:
-            resource:
-              apiVersion: v1
-              kind: Secret
-              metadata:
-                name: custom-token
-                (ownerReferences == null || length(ownerReferences) == `0`): true
+                  caConfigMap:
+                    name: external-db-ca
+                    key: ca.crt
+    - assert:
+        resource:
+          apiVersion: tadoss.livewyer.io/v1alpha1
+          kind: Tadoss
+          metadata:
+            name: external
+          status:
+            (conditions[?type == 'Ready'] | [0].status): 'False'
+            (conditions[?type == 'Ready'] | [0].reason): TokenSecretMissing
+    - apply:
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: custom-token
+          stringData:
+            token: test-only-initial-token
+    - assert:
+        resource:
+          apiVersion: tadoss.livewyer.io/v1alpha1
+          kind: Tadoss
+          metadata:
+            name: external
+          status:
+            phase: Ready
+            readyReplicas: 2
+            databaseSecret: external-db-app
+            tokenSecret: custom-token
+  - name: reject-untrusted-ca-and-recover
+    try:
+    - patch:
+        resource:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: external-db-ca
+          data:
+            ca.crt: invalid-ca
+    - assert:
+        resource:
+          apiVersion: tadoss.livewyer.io/v1alpha1
+          kind: Tadoss
+          metadata:
+            name: external
+          status:
+            phase: Error
+            (conditions[?type == 'Ready'] | [0].reason): SchemaFailed
+    - *id001
+    - assert:
+        resource:
+          apiVersion: tadoss.livewyer.io/v1alpha1
+          kind: Tadoss
+          metadata:
+            name: external
+          status:
+            phase: Ready
+  - name: rotate-and-verify
+    try:
+    - patch:
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: custom-token
+            namespace: ($namespace)
+          stringData:
+            token: test-only-rotated-token
+    - assert:
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: external-api
+          (status.observedGeneration == metadata.generation): true
+          (metadata.generation >= `2`): true
+          status:
+            updatedReplicas: 2
+            availableReplicas: 2
+    - apply:
+        file: ../../fixtures/api-check.yaml
+    - apply:
+        file: auth-check.yaml
+    - assert:
+        resource:
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: check-rotated-token
+          status:
+            succeeded: 1
+    - delete:
+        ref:
+          apiVersion: tadoss.livewyer.io/v1alpha1
+          kind: Tadoss
+          name: external
+    - assert:
+        resource:
+          apiVersion: postgresql.cnpg.io/v1
+          kind: Cluster
+          metadata:
+            name: external-db
+            (ownerReferences == null || length(ownerReferences) == `0`): true
+          status:
+            readyInstances: 1
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: custom-token
+            (ownerReferences == null || length(ownerReferences) == `0`): true
+  - name: stop-fixture-database-before-namespace-cleanup
+    try:
+    - delete:
+        ref:
+          apiVersion: postgresql.cnpg.io/v1
+          kind: Cluster
+          name: external-db
+    - wait:
+        apiVersion: v1
+        kind: Pod
+        selector: cnpg.io/cluster=external-db
+        for:
+          deletion: {}

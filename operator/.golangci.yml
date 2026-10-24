@@ -17,3 +17,8 @@ linters:
   settings:
     misspell:
       locale: UK
+  exclusions:
+    rules:
+      # This annotation is part of cert-manager's public API.
+      - linters: [misspell]
+        source: 'cert-manager\.io/subject-organizations'

@@ -1,0 +1,31 @@
+version: '3'
+vars:
+  RUNTIME_IMAGE: '{{.RUNTIME_IMAGE | default ""}}'
+  OPERATOR_IMAGE: '{{.OPERATOR_IMAGE | default ""}}'
+  HTTP_PORT: '{{.HTTP_PORT | default "18080"}}'
+  HTTPS_PORT: '{{.HTTPS_PORT | default "18443"}}'
+  KIND_ENV: '{{.ROOT_DIR}}/.local/environments/{{.CLUSTER}}-{{.PROFILE}}'
+tasks:
+  up:
+    desc: Create a disposable Kind installation for PROFILE
+    cmds:
+      - mkdir -p .local
+      - 'if [ -z "{{.RUNTIME_IMAGE}}" ]; then task images:build; fi'
+      - uv run --project src python scripts/kind_config.py --profile {{.PROFILE}} --http-port {{.HTTP_PORT}} --https-port {{.HTTPS_PORT}} --output .local/{{.CLUSTER}}-kind.yaml
+      - kind get clusters | grep -qx '{{.CLUSTER}}' || kind create cluster --name {{.CLUSTER}} --config .local/{{.CLUSTER}}-kind.yaml --kubeconfig {{.KUBECONFIG}}
+      - kind export kubeconfig --name {{.CLUSTER}} --kubeconfig {{.KUBECONFIG}}
+      - 'if [ -z "{{.RUNTIME_IMAGE}}" ]; then kind load docker-image --name {{.CLUSTER}} livewyer/tadoss-api:{{.IMAGE_TAG}} livewyer/tadoss-operator:{{.IMAGE_TAG}}; fi'
+      - uv run --project src python scripts/kind_environment.py --directory {{.KIND_ENV}} --profile {{.PROFILE}} --tag {{.IMAGE_TAG}} --runtime-image "{{.RUNTIME_IMAGE}}" --operator-image "{{.OPERATOR_IMAGE}}"
+      - '{{.ENV_COMMAND}} apply --directory {{.KIND_ENV}} --kubeconfig {{.KUBECONFIG}}'
+      - '{{.ENV_COMMAND}} wait --directory {{.KIND_ENV}} --kubeconfig {{.KUBECONFIG}}'
+  test:
+    desc: Qualify the selected profile, including strict idempotence
+    cmds:
+      - task: up
+      - '{{.ENV_COMMAND}} diff --strict --directory {{.KIND_ENV}} --kubeconfig {{.KUBECONFIG}}'
+      - uv run --project src python scripts/deployed_test.py --kubeconfig {{.KUBECONFIG}} --expected-image "{{.RUNTIME_IMAGE}}" --https-port {{.HTTPS_PORT}}
+      - mkdir -p reports/{{.PROFILE}}
+      - 'KUBECONFIG={{.KUBECONFIG}} chainsaw test --config operator/test/chainsaw/configuration.yaml --test-dir operator/test/chainsaw --set-string apiImage={{if .RUNTIME_IMAGE}}{{.RUNTIME_IMAGE}}{{else}}livewyer/tadoss-api:{{.IMAGE_TAG}}{{end}} --report-path reports/{{.PROFILE}} {{if ne .PROFILE "multi-server"}}--selector "test.tadoss.io/profile!=multi-server"{{end}}'
+  down:
+    desc: Delete the selected disposable Kind cluster
+    cmds: ['kind delete cluster --name {{.CLUSTER}}']

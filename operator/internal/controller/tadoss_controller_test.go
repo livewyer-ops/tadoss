@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -9,12 +10,12 @@ import (
 	tadossv1 "github.com/livewyer-ops/tadoss/operator/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
@@ -95,47 +96,14 @@ func TestSecretRequestsAcceptMetadata(t *testing.T) {
 	}
 }
 
-func TestMigrateDeploymentOrphansLegacySelector(t *testing.T) {
-	ctx := context.Background()
-	scheme := testScheme(t)
-	if err := appsv1.AddToScheme(scheme); err != nil {
-		t.Fatal(err)
+func TestDeploymentReadyWaitsForOldReplicas(t *testing.T) {
+	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Generation: 2}, Status: appsv1.DeploymentStatus{ObservedGeneration: 2, Replicas: 3, UpdatedReplicas: 2, AvailableReplicas: 2}}
+	if deploymentReady(deployment, 2) {
+		t.Fatal("old replica must block rollout completion")
 	}
-	cr := instance()
-	desired := workloads(cr, "db", "token", "checksum").Deployment
-	legacy := desired.DeepCopy()
-	legacy.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels(cr)}
-	if err := controllerutil.SetControllerReference(cr, legacy, scheme); err != nil {
-		t.Fatal(err)
-	}
-	r := &TadossReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(cr, legacy).Build(), Scheme: scheme}
-	waiting, err := r.migrateDeployment(ctx, cr, desired)
-	if err != nil || !waiting {
-		t.Fatalf("legacy selector not migrated: waiting=%v err=%v", waiting, err)
-	}
-	if err := r.Get(ctx, client.ObjectKeyFromObject(desired), &appsv1.Deployment{}); !apierrors.IsNotFound(err) {
-		t.Fatalf("legacy Deployment still present: %v", err)
-	}
-	if waiting, err := r.migrateDeployment(ctx, cr, desired); err != nil || waiting {
-		t.Fatal("a missing Deployment needs no migration")
-	}
-	terminating := desired.DeepCopy()
-	terminating.DeletionTimestamp = &metav1.Time{Time: time.Now()}
-	terminating.Finalizers = []string{"orphan"}
-	if err := controllerutil.SetControllerReference(cr, terminating, scheme); err != nil {
-		t.Fatal(err)
-	}
-	r = &TadossReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(cr, terminating).Build(), Scheme: scheme}
-	if waiting, err := r.migrateDeployment(ctx, cr, desired); err != nil || !waiting {
-		t.Fatal("must wait while the old Deployment is still terminating")
-	}
-	current := desired.DeepCopy()
-	if err := controllerutil.SetControllerReference(cr, current, scheme); err != nil {
-		t.Fatal(err)
-	}
-	r = &TadossReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(cr, current).Build(), Scheme: scheme}
-	if waiting, err := r.migrateDeployment(ctx, cr, desired); err != nil || waiting {
-		t.Fatal("a current selector must not be migrated")
+	deployment.Status.Replicas = 2
+	if !deploymentReady(deployment, 2) {
+		t.Fatal("complete rollout was not ready")
 	}
 }
 
@@ -153,7 +121,7 @@ func TestTokenSelfHealsOnlyWhenGenerated(t *testing.T) {
 		t.Fatalf("emptied generated Secret not refilled: %v", err)
 	}
 	supplied := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "mine", Namespace: "test"}, Data: map[string][]byte{"token": nil}}
-	cr.Spec.TokenSecret = "mine"
+	cr.Spec.Auth.TokenSecret = "mine"
 	r = &TadossReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(cr, supplied).Build(), Scheme: scheme}
 	if secret, err := r.token(ctx, cr); err != nil || len(secret.Data["token"]) != 0 {
 		t.Fatal("a user-supplied Secret must not be modified")
@@ -184,5 +152,81 @@ func TestObservedGenerationAdvancesOnlyWhenSettled(t *testing.T) {
 	}
 	if status := current(); status.ObservedGeneration != 3 || status.Phase != tadossv1.PhaseReady {
 		t.Fatalf("ready must record the generation: %+v", status)
+	}
+}
+
+func TestReferenceFingerprintUsesOnlyObjectRevisions(t *testing.T) {
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "test", UID: "secret-uid", ResourceVersion: "1"}, Data: map[string][]byte{"uri": []byte("password-one")}}
+	ca := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "ca", Namespace: "test", UID: "ca-uid", ResourceVersion: "2"}, Data: map[string]string{"ca.pem": "certificate"}}
+	fingerprint := referenceFingerprint(secret, ca)
+	if fingerprint != referenceFingerprint(ca, secret, secret) {
+		t.Fatal("reference order or duplication changed fingerprint")
+	}
+	secret.Data["uri"] = []byte("password-two")
+	ca.Data["ca.pem"] = "different certificate"
+	if fingerprint != referenceFingerprint(secret, ca) {
+		t.Fatal("fingerprint exposes a content verifier")
+	}
+	for _, object := range []client.Object{secret, ca} {
+		before := referenceFingerprint(secret, ca)
+		object.SetResourceVersion("3")
+		if before == referenceFingerprint(secret, ca) {
+			t.Fatal("rotation did not change fingerprint")
+		}
+	}
+	cr := instance()
+	job := schemaJob(cr, secret.Name, referenceFingerprint(secret, ca))
+	ca.UID = "replacement-ca"
+	if job.Name == schemaJob(cr, secret.Name, referenceFingerprint(secret, ca)).Name {
+		t.Fatal("CA replacement must rerun migration")
+	}
+}
+
+func TestRetainDetachesBackupAndPreservesOtherOwners(t *testing.T) {
+	ctx, scheme := context.Background(), testScheme(t)
+	cr := instance()
+	cr.Finalizers = []string{finalizer}
+	cr.Spec.DeletionProtection = ptr.To(false)
+	cr.Spec.DeletionPolicy = tadossv1.DeletionPolicyRetain
+	cluster := databaseCluster(cr)
+	backup := &cnpgv1.ScheduledBackup{ObjectMeta: metadata(cr, "-backup")}
+	for _, object := range []client.Object{cluster, backup} {
+		if err := controllerutil.SetControllerReference(cr, object, scheme); err != nil {
+			t.Fatal(err)
+		}
+		object.SetOwnerReferences(append(object.GetOwnerReferences(), metav1.OwnerReference{APIVersion: "v1", Kind: "ConfigMap", Name: "foreign", UID: "foreign-uid"}))
+	}
+	failBackupPatch := true
+	cli := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cr, cluster, backup).WithInterceptorFuncs(interceptor.Funcs{
+		Patch: func(ctx context.Context, cli client.WithWatch, obj client.Object, patch client.Patch, options ...client.PatchOption) error {
+			if _, ok := obj.(*cnpgv1.ScheduledBackup); ok && failBackupPatch {
+				failBackupPatch = false
+				return errors.New("transient patch failure")
+			}
+			return cli.Patch(ctx, obj, patch, options...)
+		},
+	}).Build()
+	r := &TadossReconciler{Client: cli, Scheme: scheme}
+	if _, err := r.handleDeletion(ctx, cr); err == nil {
+		t.Fatal("backup patch failure must retain finalizer")
+	}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(cr), cr); err != nil {
+		t.Fatal(err)
+	}
+	if !controllerutil.ContainsFinalizer(cr, finalizer) {
+		t.Fatal("finalizer released before detaching backup")
+	}
+	for range 2 {
+		if _, err := r.handleDeletion(ctx, cr); err != nil {
+			t.Fatal(err)
+		}
+		for _, object := range []client.Object{cluster, backup} {
+			if err := r.Get(ctx, client.ObjectKeyFromObject(object), object); err != nil {
+				t.Fatal(err)
+			}
+			if owners := object.GetOwnerReferences(); len(owners) != 1 || owners[0].UID != "foreign-uid" {
+				t.Fatalf("unexpected owners: %v", owners)
+			}
+		}
 	}
 }

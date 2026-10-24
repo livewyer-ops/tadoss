@@ -7,10 +7,8 @@ status:
   readyReplicas: 1
   tokenSecret: journey-api-token
   databaseSecret: journey-db-app
-  conditions:
-    - type: Ready
-      status: "True"
-      reason: Available
+  (conditions[?type == 'Ready'] | [0].status): 'True'
+  (conditions[?type == 'Ready'] | [0].reason): Available
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -18,20 +16,20 @@ kind: Deployment
 metadata:
   name: journey-api
   ownerReferences:
-    - apiVersion: tadoss.livewyer.io/v1alpha1
-      kind: Tadoss
-      name: journey
-      controller: true
+  - apiVersion: tadoss.livewyer.io/v1alpha1
+    kind: Tadoss
+    name: journey
+    controller: true
 spec:
   replicas: 1
   template:
     spec:
       automountServiceAccountToken: false
       containers:
-        - name: api
-          securityContext:
-            readOnlyRootFilesystem: true
-            allowPrivilegeEscalation: false
+      - name: api
+        securityContext:
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
 ---
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster

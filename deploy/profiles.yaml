@@ -1,0 +1,20 @@
+local-kind:
+  kindConfig: deploy/kind/single-node.yaml
+  apiReplicas: 1
+  workerReplicas: 1
+  databaseInstances: 1
+edge:
+  kindConfig: deploy/kind/single-node.yaml
+  apiReplicas: 1
+  workerReplicas: 1
+  databaseInstances: 1
+single-server:
+  kindConfig: deploy/kind/single-node.yaml
+  apiReplicas: 1
+  workerReplicas: 1
+  databaseInstances: 1
+multi-server:
+  kindConfig: deploy/kind/multi-node.yaml
+  apiReplicas: 2
+  workerReplicas: 2
+  databaseInstances: 3

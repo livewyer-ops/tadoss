@@ -1,0 +1,7 @@
+version: '3'
+tasks:
+  audit:
+    desc: Audit locked Python and Go dependencies
+    cmds:
+      - mkdir -p reports
+      - osv-scanner scan source --lockfile=src/uv.lock --lockfile=operator/go.mod --format=sarif --output-file=reports/osv.sarif

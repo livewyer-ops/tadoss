@@ -1,0 +1,29 @@
+apiVersion: tadoss.livewyer.io/v1alpha1
+kind: Tadoss
+metadata:
+  name: journey
+spec:
+  version: 0.1.0
+  profile: local-kind
+  api:
+    image: ($values.apiImage)
+  deletionProtection: false
+  deletionPolicy: Delete
+  backends:
+    db:
+      providedBy: cnpg
+      cnpg:
+        backup:
+          enabled: true
+          schedule: 0 0 0 * * *
+          retentionPolicy: 7d
+          objectStore:
+            destinationPath: s3://qualification/
+            endpointURL: http://backup-store
+            s3Credentials:
+              accessKeyId:
+                name: backup-credentials
+                key: ACCESS_KEY_ID
+              secretAccessKey:
+                name: backup-credentials
+                key: ACCESS_SECRET_KEY

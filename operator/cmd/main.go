@@ -9,6 +9,7 @@ import (
 	cnpgv1 "github.com/cloudnative-pg/cloudnative-pg/api/v1"
 	tadossv1 "github.com/livewyer-ops/tadoss/operator/api/v1alpha1"
 	"github.com/livewyer-ops/tadoss/operator/internal/controller"
+	"github.com/livewyer-ops/tadoss/operator/internal/controller/defaults"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -28,7 +29,7 @@ import (
 func main() {
 	var namespaces, metrics, probes string
 	var leaderElection, metricsSecure bool
-	flag.StringVar(&namespaces, "watch-namespaces", "", "Comma-separated namespace scope; empty watches all")
+	flag.StringVar(&namespaces, "watch-namespaces", os.Getenv("WATCH_NAMESPACES"), "Comma-separated namespace scope; empty watches all")
 	flag.StringVar(&metrics, "metrics-bind-address", ":8443", "Metrics address; 0 disables the endpoint")
 	flag.BoolVar(&metricsSecure, "metrics-secure", true, "Serve metrics over HTTPS and require a token with access to /metrics")
 	flag.StringVar(&probes, "health-probe-bind-address", ":8081", "Health address")
@@ -54,7 +55,7 @@ func main() {
 		Metrics:                       metricsOptions,
 		// Secrets are watched as metadata only and read live, so credential contents never sit in the cache.
 		Cache:  cache.Options{DefaultTransform: cache.TransformStripManagedFields()},
-		Client: client.Options{Cache: &client.CacheOptions{DisableFor: []client.Object{&corev1.Secret{}}}},
+		Client: client.Options{Cache: &client.CacheOptions{DisableFor: []client.Object{&corev1.Secret{}, &corev1.ConfigMap{}}}},
 	}
 	if namespaces != "" {
 		options.Cache.DefaultNamespaces = map[string]cache.Config{}
@@ -64,7 +65,7 @@ func main() {
 	}
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), options)
 	must(err)
-	reconciler := &controller.TadossReconciler{Client: mgr.GetClient(), Scheme: scheme, Recorder: mgr.GetEventRecorder("tadoss-operator")}
+	reconciler := &controller.TadossReconciler{Client: mgr.GetClient(), Scheme: scheme, Recorder: mgr.GetEventRecorder("tadoss-operator"), Defaults: defaults.Load(os.Getenv("TADOSS_INSTANCE_DEFAULTS"))}
 	must(reconciler.SetupWithManager(mgr))
 	must(mgr.AddHealthzCheck("healthz", healthz.Ping))
 	must(mgr.AddReadyzCheck("readyz", healthz.Ping))
