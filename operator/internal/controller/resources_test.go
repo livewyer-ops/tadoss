@@ -176,7 +176,7 @@ func TestDatabaseAndIngressOverrides(t *testing.T) {
 
 func TestNativeWorkloadAndRecoveryConfiguration(t *testing.T) {
 	cr := instance()
-	cr.Status.Resolved.SchemaTarget = "0003_background"
+	cr.Status.Resolved.SchemaTarget = "0001_baseline"
 	cr.Spec.API.Env = map[string]string{"TADOSS_HOST": "wrong", "CUSTOM": "value", "TADOSS_API_TOKEN": "must-not-override"}
 	cr.Spec.Auth.BasicSecret = "basic"
 	cr.Spec.Backends.DB.ProvidedBy = tadossv1.ProviderExternal

@@ -2,7 +2,7 @@
   "version": "0.1.0",
   "apiVersion": "0.1",
   "upstreamRevision": "d2b90e52d54db947f4c8ddab571538ed18ab3052",
-  "schemaTarget": "0003_background",
+  "schemaTarget": "0001_baseline",
   "runtimeRepository": "livewyer/tadoss-api",
   "operatorRepository": "livewyer/tadoss-operator",
   "platformCharts": {"cloudnative-pg": "0.28.2", "traefik": "40.2.0", "cert-manager": "v1.20.2"}

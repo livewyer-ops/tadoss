@@ -5,12 +5,13 @@ import os
 import re
 from dataclasses import dataclass, fields
 from pathlib import Path
+from typing import Any, Self
 from urllib.parse import urlsplit
 
 from tadoss import RELEASE
 
 
-def parse_flag(value):
+def parse_flag(value: str) -> bool:
     if value.lower() in {"1", "true", "yes", "on"}:
         return True
     if value.lower() in {"0", "false", "no", "off"}:
@@ -18,7 +19,7 @@ def parse_flag(value):
     raise ValueError("Boolean setting must be true or false")
 
 
-def env_flag(name, default):
+def env_flag(name: str, default: bool | None) -> bool | None:
     value = os.getenv(name)
     return default if value is None else parse_flag(value)
 
@@ -63,7 +64,7 @@ class Settings:
     log_format: str = "json"
 
     @classmethod
-    def load(cls, **overrides):
+    def load(cls, **overrides: Any) -> Self:
         values = {}
         for field in fields(cls):
             name = "TADOSS_" + field.name.upper()
@@ -91,7 +92,7 @@ class Settings:
         settings.validate()
         return settings
 
-    def validate(self):
+    def validate(self) -> None:
         if self.schema_target != RELEASE["schemaTarget"]:
             raise ValueError("Image does not support TADOSS_SCHEMA_TARGET")
         for field in fields(self):
@@ -157,7 +158,7 @@ class Settings:
         elif self.oauth2_audience or self.oauth2_jwks_uri:
             raise ValueError("Set TADOSS_OAUTH2_ISSUER")
 
-    def database_url(self):
+    def database_url(self) -> str:
         if self.database:
             if self.database_ssl_root_cert:
                 from psycopg.conninfo import make_conninfo
@@ -172,7 +173,7 @@ class Settings:
             return "postgresql://tadoss:tadoss@127.0.0.1:15432/tadoss"
         raise ValueError("Set TADOSS_DATABASE")
 
-    def require_auth(self):
+    def require_auth(self) -> None:
         if not (
             self.api_token or self.basic_auth_password or self.oauth2_issuer or self.dev
         ):

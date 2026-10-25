@@ -1,9 +1,34 @@
 version: '3'
+set: [errexit, nounset, pipefail]
 tasks:
   check:
     desc: Check release version, schema and artifact inputs
     cmds: [uv run --project src python scripts/release.py check]
+  preflight:
+    desc: Reject existing registry tags and GitHub releases
+    requires: {vars: [GITHUB_REF_NAME, GITHUB_REPOSITORY]}
+    cmds:
+      - uv run --project src --frozen python scripts/release_preflight.py {{.GITHUB_REF_NAME | shellQuote}}
+      - |
+        published=$(gh api --paginate {{printf "repos/%s/releases" .GITHUB_REPOSITORY | shellQuote}} --jq '.[].tag_name')
+        if printf '%s\n' "$published" | grep -Fxq {{.GITHUB_REF_NAME | shellQuote}}; then
+          echo 'Version is already published; choose a new version' >&2
+          exit 1
+        else
+          exit 0
+        fi
   artifacts:
     desc: Assemble installation and release metadata from immutable images
     requires: {vars: [RUNTIME_IMAGE, OPERATOR_IMAGE]}
-    cmds: ['uv run --project src python scripts/release.py artifacts --runtime-image {{.RUNTIME_IMAGE}} --operator-image {{.OPERATOR_IMAGE}}']
+    vars:
+      OUTPUT_DIR: '{{.OUTPUT_DIR | default "dist"}}'
+    cmds:
+      - uv run --project src --frozen python scripts/release.py metadata --runtime-image {{.RUNTIME_IMAGE | shellQuote}} --operator-image {{.OPERATOR_IMAGE | shellQuote}} --output {{.OUTPUT_DIR | shellQuote}}
+      - |
+        mkdir -p .local/tmp
+        render=$(mktemp -d .local/tmp/release.XXXXXX)
+        trap 'rm -rf "$render"' EXIT
+        cp deploy/operator/install.yaml "$render/install.yaml"
+        (cd "$render" && kustomize create --resources install.yaml && kustomize edit set image {{printf "livewyer/tadoss-operator=%s" .OPERATOR_IMAGE | shellQuote}})
+        kustomize build "$render" > {{.OUTPUT_DIR | shellQuote}}/install.yaml
+      - cd {{.OUTPUT_DIR | shellQuote}} && sha256sum release.json catalogue.json compatibility.yaml install.yaml > SHA256SUMS

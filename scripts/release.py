@@ -1,7 +1,6 @@
-"""Check and assemble one exact TADOSS release."""
+"""Validate release inputs and write metadata for native artifact assembly."""
 
 import argparse
-import hashlib
 import json
 import re
 import subprocess
@@ -48,7 +47,7 @@ def check():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["check", "catalogue", "artifacts"])
+    parser.add_argument("command", choices=["check", "catalogue", "metadata"])
     parser.add_argument("--runtime-image")
     parser.add_argument("--operator-image")
     parser.add_argument("--output", type=Path, default=ROOT / "dist")
@@ -118,31 +117,6 @@ def main():
                 ),
             },
             sort_keys=False,
-        )
-    )
-    manifests = list(
-        yaml.safe_load_all((ROOT / "deploy/operator/install.yaml").read_text())
-    )
-    for manifest in manifests:
-        if (
-            manifest
-            and manifest["kind"] == "Deployment"
-            and manifest["metadata"]["name"] == "tadoss-operator"
-        ):
-            manifest["spec"]["template"]["spec"]["containers"][0]["image"] = (
-                args.operator_image
-            )
-    (args.output / "install.yaml").write_text(
-        yaml.safe_dump_all(manifests, sort_keys=False)
-    )
-    paths = ["release.json", "catalogue.json", "compatibility.yaml", "install.yaml"]
-    (args.output / "SHA256SUMS").write_text(
-        "".join(
-            hashlib.sha256((args.output / name).read_bytes()).hexdigest()
-            + "  "
-            + name
-            + "\n"
-            for name in paths
         )
     )
 

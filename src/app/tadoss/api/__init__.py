@@ -1,31 +1,30 @@
 import copy
-import json
 import logging
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+import anyio
 import psycopg
 from asgi_correlation_id import CorrelationIdMiddleware, correlation_id
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from tadoss import __version__, metrics, telemetry
 from tadoss.adapters import postgres as store
 from tadoss.auth import Authentication
+from tadoss.domain.types import Document
 from tadoss.domain.validation import (
     SPEC,
     APIError,
 )
 from tadoss.settings import Settings
 
-from .http import finite_float
-from .routes import dispatch
+from .routes import router
 
-MAX_BODY = 1024 * 1024
 PROBES = {"/healthz", "/readyz"}
 logger = logging.getLogger("tadoss")
 access_logger = logging.getLogger("tadoss.access")
@@ -34,17 +33,17 @@ access_logger = logging.getLogger("tadoss.access")
 class AccessLog:
     """Logs method, route template, status and duration; never the query string."""
 
-    def __init__(self, app):
+    def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
-    async def __call__(self, scope, receive, send):
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
         started = time.perf_counter()
         status = 500
 
-        async def record(message):
+        async def record(message: Message) -> None:
             nonlocal status
             if message["type"] == "http.response.start":
                 status = message["status"]
@@ -83,7 +82,7 @@ class AccessLog:
             )
 
 
-def published_contract():
+def published_contract() -> Document:
     contract = copy.deepcopy(SPEC)
     contract["info"]["title"] = "TADOSS"
     contract["info"].pop("contact", None)
@@ -91,7 +90,12 @@ def published_contract():
     return contract
 
 
-def create_app(database=None, token=None, dev=None, settings=None):
+def create_app(
+    database: str | None = None,
+    token: str | None = None,
+    dev: bool | None = None,
+    settings: Settings | None = None,
+) -> FastAPI:
     settings = settings or Settings.load(database=database, api_token=token, dev=dev)
     database = settings.database_url()
     authentication = Authentication(settings)
@@ -110,6 +114,7 @@ def create_app(database=None, token=None, dev=None, settings=None):
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        app.state.database_slots = anyio.CapacityLimiter(settings.pool_max_size)
         # Connections are established in the background; a request waits up to the
         # pool timeout for one, so a slow database delays readiness instead of
         # crashing the process.
@@ -136,12 +141,12 @@ def create_app(database=None, token=None, dev=None, settings=None):
     telemetry.instrument(app)
 
     @app.exception_handler(APIError)
-    async def api_error(request, exc):
+    async def api_error(request: Request, exc: APIError) -> JSONResponse:
         headers = {"WWW-Authenticate": "Bearer"} if exc.status == 401 else None
         return JSONResponse(exc.body, status_code=exc.status, headers=headers)
 
     @app.exception_handler(HTTPException)
-    async def http_error(request, exc):
+    async def http_error(request: Request, exc: HTTPException) -> JSONResponse:
         return JSONResponse(
             APIError(exc.status_code, exc.detail).body,
             status_code=exc.status_code,
@@ -149,7 +154,9 @@ def create_app(database=None, token=None, dev=None, settings=None):
         )
 
     @app.exception_handler(psycopg.OperationalError)
-    async def database_unavailable(request, exc):
+    async def database_unavailable(
+        request: Request, exc: psycopg.OperationalError
+    ) -> JSONResponse:
         logger.warning(
             "Transient database operation failure",
             extra={"exception_type": type(exc).__name__, "sqlstate": exc.sqlstate},
@@ -161,14 +168,16 @@ def create_app(database=None, token=None, dev=None, settings=None):
         )
 
     @app.exception_handler(psycopg.IntegrityError)
-    async def conflicting_change(request, exc):
+    async def conflicting_change(
+        request: Request, exc: psycopg.IntegrityError
+    ) -> JSONResponse:
         return JSONResponse(
             APIError(409, "A concurrent change conflicts with this request").body,
             status_code=409,
         )
 
     @app.exception_handler(psycopg.Error)
-    async def database_error(request, exc):
+    async def database_error(request: Request, exc: psycopg.Error) -> JSONResponse:
         logger.error(
             "Database error",
             extra={"exception_type": type(exc).__name__, "sqlstate": exc.sqlstate},
@@ -178,7 +187,7 @@ def create_app(database=None, token=None, dev=None, settings=None):
         )
 
     @app.exception_handler(Exception)
-    async def server_error(request, exc):
+    async def server_error(request: Request, exc: Exception) -> JSONResponse:
         return JSONResponse(
             APIError(500, "Internal server error").body,
             status_code=500,
@@ -186,16 +195,16 @@ def create_app(database=None, token=None, dev=None, settings=None):
         )
 
     @app.get("/metrics", include_in_schema=False)
-    def prometheus_metrics(request: Request):
+    def prometheus_metrics(request: Request) -> Response:
         authentication.authenticate(request)
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     @app.get("/healthz", include_in_schema=False)
-    def health():
+    def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.get("/readyz", include_in_schema=False)
-    def ready():
+    @app.get("/readyz", include_in_schema=False, response_model=None)
+    def ready() -> dict[str, str] | JSONResponse:
         try:
             with store.transaction(pool, timeout=2) as db:
                 store.check_schema(db)
@@ -209,38 +218,6 @@ def create_app(database=None, token=None, dev=None, settings=None):
             )
         return {"status": "ready"}
 
-    async def endpoint(request: Request):
-        request.state.identity = await run_in_threadpool(
-            authentication.authenticate, request
-        )
-        body = None
-        if request.method in {"PUT", "POST"}:
-            if (
-                request.headers.get("content-type", "").split(";")[0].lower()
-                != "application/json"
-            ):
-                raise APIError(415, "Content-Type must be application/json")
-            raw = bytearray()
-            async for chunk in request.stream():
-                if len(raw) + len(chunk) > MAX_BODY:
-                    raise APIError(413, "Request body exceeds 1 MiB")
-                raw.extend(chunk)
-            try:
-                body = json.loads(
-                    raw,
-                    parse_constant=finite_float,
-                    parse_float=finite_float,
-                )
-            except (ValueError, UnicodeError, RecursionError) as exc:
-                raise APIError(400, "Request body must be valid JSON") from exc
-        response = await run_in_threadpool(dispatch, request, pool, body)
-        if request.method == "HEAD":
-            response.body = b""
-        return response
-
-    contract = published_contract()
-    for path, operations in contract["paths"].items():
-        methods = [m.upper() for m in operations if m != "parameters"]
-        app.add_api_route(path, endpoint, methods=methods, include_in_schema=False)
-    app.openapi = lambda: contract
+    app.include_router(router, include_in_schema=False)
+    app.openapi = published_contract
     return app

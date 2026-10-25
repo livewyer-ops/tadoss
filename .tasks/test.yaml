@@ -2,18 +2,19 @@ version: '3'
 tasks:
   fast:
     desc: Run checks that do not require PostgreSQL or Kubernetes
-    cmds: ["uv run --project src --frozen pytest -q tests/test_settings.py tests/test_environment.py tests/test_vendor_spec.py tests/test_support_bundle.py tests/test_release.py tests/test_webhook_delivery.py"]
+    cmds: ["uv run --project src --frozen pytest -q tests/test_settings.py tests/test_environment.py tests/test_repository.py tests/test_documented_task_commands.py tests/test_chainsaw_native_policy.py tests/test_chainsaw_fixture_programmes.py tests/workers/test_worker_http_health.py tests/test_vendor_spec.py tests/test_support_bundle.py tests/test_release.py tests/test_webhook_delivery.py"]
   all:
     desc: Run Python tests against isolated PostgreSQL schemas
     cmds:
       - task: :dev:db
-      - uv run --project src --frozen pytest -q tests --junitxml=reports/python.xml
+      - uv run --project src --frozen coverage run --rcfile=src/pyproject.toml -m pytest -q tests --junitxml=reports/python.xml
+      - uv run --project src --frozen coverage report --rcfile=src/pyproject.toml
+      - uv run --project src --frozen coverage xml --rcfile=src/pyproject.toml -o reports/python-coverage.xml
   tads:
     desc: Run current TADS contract and semantic checks
     cmds:
       - task: :dev:db
-      - uv run --project src --frozen python scripts/check_contract.py
-      - uv run --project src --frozen pytest -q tests/test_api.py tests/test_background.py tests/test_auth.py --junitxml=reports/tads.xml
+      - uv run --project src --frozen pytest -q tests/test_repository.py tests/api tests/adapters tests/workers tests/test_auth.py --junitxml=reports/tads.xml
   manifests:
     desc: Validate native installation and environment rendering
     cmds:
@@ -22,5 +23,5 @@ tasks:
         cmd: 'kubectl kustomize deploy/environments/{{.ITEM}}/operator > /dev/null && kubectl kustomize deploy/environments/{{.ITEM}} > /dev/null'
       - helm lint deploy/charts/tadoss-issuer
       - helm lint deploy/charts/tadoss-issuer -f deploy/charts/tadoss-issuer/ci/acme-values.yaml
-      - uv run --project src --frozen python scripts/check_contract.py
-      - uv run --project src --frozen python scripts/check_docs.py
+      - uv run --project src --frozen pytest -q tests/test_repository.py tests/test_documented_task_commands.py tests/test_chainsaw_native_policy.py
+      - for test in operator/test/chainsaw/*/*/chainsaw-test.yaml tests/deployed/chainsaw-test.yaml; do chainsaw lint test --file "$test"; done

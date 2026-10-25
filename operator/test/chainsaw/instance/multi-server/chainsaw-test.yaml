@@ -75,12 +75,11 @@ spec:
             name: multi-api
           spec:
             minAvailable: 1
-    - script:
-        content: |
-          kubectl -n "$NAMESPACE" get pod -l app.kubernetes.io/instance=multi,app.kubernetes.io/component=api \
-            -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}' | sort -u | wc -l
-        check:
-          (to_number(trim_space($stdout)) >= `2`): true
+    - assert:
+        resource:
+          (x_k8s_list($client, 'v1', 'Pod', $namespace)):
+            (items[?metadata.labels."app.kubernetes.io/instance" == 'multi' && metadata.labels."app.kubernetes.io/component" == 'api' && metadata.deletionTimestamp == null && spec.nodeName]):
+              (length(keys(group_by(@, &spec.nodeName))) >= `2`): true
   - name: stop-database-before-namespace-cleanup
     try:
     - delete:

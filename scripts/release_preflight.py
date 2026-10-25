@@ -1,8 +1,7 @@
-"""Refuse replacement of a version and verify promoted image digests."""
+"""Refuse publication unless registry manifests explicitly return HTTP 404."""
 
 import argparse
 import json
-import os
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -41,35 +40,12 @@ def registry_manifest(repository, version):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("tag")
-    parser.add_argument("--verify", type=Path)
     args = parser.parse_args()
     release = json.loads(Path("src/app/tadoss/release.json").read_text())
     if args.tag != "v" + release["version"]:
         parser.error("Tag must equal the release version")
-    metadata = json.loads(args.verify.read_text()) if args.verify else None
     for group in ("runtime", "operator"):
-        repository = release[group + "Repository"]
-        request = registry_manifest(repository, release["version"])
-        if metadata:
-            expected = metadata[group + "Image"]
-            if not expected.startswith(repository + "@sha256:"):
-                parser.error("Artifact repository differs from release metadata")
-            with urlopen(request, timeout=20) as response:  # noqa: S310 fixed HTTPS registry
-                if response.headers["Docker-Content-Digest"] != expected.split("@")[1]:
-                    parser.error("Promoted tag differs from qualified digest")
-        else:
-            absent(request)
-    if not metadata:
-        repository = os.environ["GITHUB_REPOSITORY"]
-        absent(
-            Request(
-                "https://api.github.com/repos/"
-                + repository
-                + "/releases/tags/"
-                + args.tag,
-                headers={"Authorization": "Bearer " + os.environ["GH_TOKEN"]},
-            )
-        )
+        absent(registry_manifest(release[group + "Repository"], release["version"]))
 
 
 if __name__ == "__main__":

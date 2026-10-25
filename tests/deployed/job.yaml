@@ -1,0 +1,45 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: deployed-check
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 240
+  template:
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      containers:
+      - name: check
+        image: ($values.apiImage)
+        command: [python, /check/checks.py]
+        env:
+        - name: TADOSS_DATABASE
+          valueFrom:
+            secretKeyRef:
+              name: tadoss-db-app
+              key: uri
+        - name: TADOSS_DATABASE_SSL_ROOT_CERT
+          value: /database-ca/ca.crt
+        - name: TADOSS_API_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: tadoss-api-token
+              key: token
+        volumeMounts:
+        - name: check
+          mountPath: /check
+          readOnly: true
+        - name: ca
+          mountPath: /database-ca
+          readOnly: true
+      volumes:
+      - name: check
+        configMap:
+          name: deployed-check
+      - name: ca
+        secret:
+          secretName: tadoss-db-ca
+          items:
+          - key: ca.crt
+            path: ca.crt

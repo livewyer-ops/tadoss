@@ -37,6 +37,7 @@ Multi-server defaults to two API and worker replicas and three database instance
 | `TADOSS_BASIC_AUTH_USERNAME`, `TADOSS_BASIC_AUTH_PASSWORD` | Username defaults to `tadoss`; password enables Basic |
 | `TADOSS_OAUTH2_ISSUER`, `TADOSS_OAUTH2_AUDIENCE`, `TADOSS_OAUTH2_JWKS_URI` | All required to enable JWT bearer verification |
 | `TADOSS_POOL_MIN_SIZE`, `TADOSS_POOL_MAX_SIZE` | 1 / 10 per process |
+| `TADOSS_POOL_TIMEOUT` | 30 seconds for request admission and for acquiring a database connection |
 | `TADOSS_STATEMENT_TIMEOUT` | 30s |
 | `TADOSS_DELETE_BATCH_SIZE`, `TADOSS_DELETE_SYNC_SECONDS` | 1000 / 1 second before deferred work |
 | `TADOSS_WORKER_LEASE_SECONDS` | 60 seconds |
@@ -46,6 +47,10 @@ Multi-server defaults to two API and worker replicas and three database instance
 | `TADOSS_DEV` | false; true permits local anonymous access and a local database default |
 
 Typed Kubernetes fields own their corresponding environment variables. Secret and CA object revisions trigger workload rollouts. Configure the same worker settings on API and worker when changing queue behaviour. PostgreSQL JSONB cannot store NUL or lone surrogate characters; writes reject them with a client error, independently for each event in a batch.
+
+The API admits up to `TADOSS_POOL_MAX_SIZE` database requests per process. Further requests wait asynchronously and receive HTTP 503 with `Retry-After` if admission times out. Authentication and input parsing precede admission. Admitted synchronous work finishes its transaction before releasing capacity, including when the request is cancelled. Size database pools across all API and worker replicas against PostgreSQL's connection limit.
+
+JWT verification requires `exp`, `sub`, `iss` and `aud`; the nonempty `sub` is the identity. Scopes may be a space-separated string or a list of strings in `scope`, with `scp` used only when `scope` is absent. Other scope values grant no permissions.
 
 ## Defaults and status
 
@@ -78,7 +83,7 @@ Typed Kubernetes fields own their corresponding environment variables. Secret an
 | Condition | Meaning and useful reasons |
 | --- | --- |
 | `Ready` | Overall rollout; `Available`, `Paused`, `ConfigurationInvalid`, `DatabasePending`, `DatabaseSecretMissing`, `DatabaseSecretInvalid`, `DatabaseCAMissing`, `DatabaseCAInvalid`, `SchemaPending`, `SchemaFailed`, `RolloutPending`, `DeletionBlocked`, `RestoreRequiresNewInstance`, `ReconcileFailed` |
-| `DatabaseReady` | Managed replicas and URI/CA inputs are available; an external database is not probed by the controller |
+| `DatabaseReady` | Managed database Pods are ready on the selected image and URI/CA inputs are available; an external database is not probed by the controller |
 | `SchemaMigrated` | The selected schema Job completed |
 | `APIReady`, `WorkerReady` | All replicas match the current Deployment generation and are available |
 | `BackupPolicyReady` | CNPG has reported a successful backup; `NotConfigured` when disabled; absent for external databases |
@@ -95,7 +100,9 @@ Managed clients mount `<instance>-db-ca` key `ca.crt` and set `TADOSS_DATABASE_S
 | `TADOSS_WORKER_POLL_INTERVAL_SECONDS` | 5; sleep only when idle or after a database failure; maintenance uses this cadence |
 | `TADOSS_WORKER_MAX_REQUESTS` | 50 jobs per batch; a full batch is followed immediately by another |
 | `TADOSS_WORKER_HEALTH_PORT` | 8001; health, readiness and metrics |
-| `TADOSS_WEBHOOK_TIMEOUT_SECONDS` | 10; total TCP, TLS, send and response-read budget after DNS validation |
+| `TADOSS_WEBHOOK_TIMEOUT_SECONDS` | 10; total TCP, TLS, send and response-header budget after DNS validation |
 | `TADOSS_WEBHOOK_MAX_ATTEMPTS` | 5 attempts per delivery; independent of deletion failures |
 
-DNS resolution uses the platform resolver and is outside the webhook deadline. A receiver that keeps sending small chunks cannot extend the socket budget. Response bodies are read up to 64KiB. Configure a suitable resolver timeout at the platform level.
+DNS resolution uses the platform resolver and is outside the webhook deadline. All resolved addresses are checked before connecting. Connection failures try the next validated address within the same deadline; requests are sent only once per attempt. A receiver that keeps sending small header chunks cannot extend the socket budget. Delivery uses the HTTP status and closes the response without reading its body. Configure a suitable resolver timeout at the platform level.
+
+The worker serves `GET` and `HEAD` on `/healthz`, `/readyz` and `/metrics`. Health and readiness return short plain-text responses; HEAD omits the body. Readiness requires a successful database/schema check, and both probes fail when progress is stale or the worker shuts down. Unknown paths return 404. Failure to bind the health port stops worker startup.

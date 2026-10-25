@@ -1,0 +1,74 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: deployed-runtime
+spec:
+  catch:
+  - events: {}
+  - podLogs:
+      selector: job-name=deployed-check
+  steps:
+  - name: verify-qualified-images
+    try:
+    - assert:
+        resource:
+          apiVersion: tadoss.livewyer.io/v1alpha1
+          kind: Tadoss
+          metadata:
+            name: tadoss
+          (status.observedGeneration == metadata.generation): true
+          status:
+            phase: Ready
+    - assert:
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: tadoss-api
+          spec:
+            template:
+              spec:
+                containers:
+                - name: api
+                  image: ($values.apiImage)
+                  (env[?name == 'TADOSS_DATABASE_SSL_ROOT_CERT'] | [0].value): /etc/tadoss/database-ca/ca.pem
+    - assert:
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: tadoss-worker
+          spec:
+            template:
+              spec:
+                containers:
+                - name: worker
+                  image: ($values.apiImage)
+  - name: exercise-protocols
+    try:
+    - command:
+        entrypoint: cat
+        args: [checks.py]
+        outputs:
+        - name: checks
+          value: ($stdout)
+    - apply:
+        resource:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: deployed-check
+          data:
+            checks.py: ($checks)
+    - apply:
+        file: job.yaml
+    - assert:
+        resource:
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: deployed-check
+          status:
+            (conditions[?type == 'Complete'] | [0].status): 'True'
+    - podLogs:
+        selector: job-name=deployed-check

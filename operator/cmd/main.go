@@ -4,7 +4,6 @@ package main
 import (
 	"flag"
 	"os"
-	"strings"
 
 	cnpgv1 "github.com/cloudnative-pg/cloudnative-pg/api/v1"
 	tadossv1 "github.com/livewyer-ops/tadoss/operator/api/v1alpha1"
@@ -54,18 +53,19 @@ func main() {
 		HealthProbeBindAddress:        probes,
 		Metrics:                       metricsOptions,
 		// Secrets are watched as metadata only and read live, so credential contents never sit in the cache.
-		Cache:  cache.Options{DefaultTransform: cache.TransformStripManagedFields()},
+		// Managed field ownership is retained for authoritative resource apply.
 		Client: client.Options{Cache: &client.CacheOptions{DisableFor: []client.Object{&corev1.Secret{}, &corev1.ConfigMap{}}}},
 	}
-	if namespaces != "" {
+	watchNamespaces := controller.ParseWatchNamespaces(namespaces)
+	if len(watchNamespaces) > 0 {
 		options.Cache.DefaultNamespaces = map[string]cache.Config{}
-		for _, namespace := range strings.Split(namespaces, ",") {
-			options.Cache.DefaultNamespaces[strings.TrimSpace(namespace)] = cache.Config{}
+		for namespace := range watchNamespaces {
+			options.Cache.DefaultNamespaces[namespace] = cache.Config{}
 		}
 	}
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), options)
 	must(err)
-	reconciler := &controller.TadossReconciler{Client: mgr.GetClient(), Scheme: scheme, Recorder: mgr.GetEventRecorder("tadoss-operator"), Defaults: defaults.Load(os.Getenv("TADOSS_INSTANCE_DEFAULTS"))}
+	reconciler := &controller.TadossReconciler{Client: mgr.GetClient(), Scheme: scheme, Recorder: mgr.GetEventRecorder("tadoss-operator"), Defaults: defaults.Load(os.Getenv("TADOSS_INSTANCE_DEFAULTS")), WatchNamespaces: watchNamespaces}
 	must(reconciler.SetupWithManager(mgr))
 	must(mgr.AddHealthzCheck("healthz", healthz.Ping))
 	must(mgr.AddReadyzCheck("readyz", healthz.Ping))

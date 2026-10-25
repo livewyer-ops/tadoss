@@ -4,22 +4,25 @@ import base64
 import binascii
 import hmac
 from dataclasses import dataclass
+from typing import Any, cast
 
 import jwt
+from fastapi import Request
 
 from tadoss.domain.validation import APIError
+from tadoss.settings import Settings
 
 
 @dataclass(frozen=True)
 class Identity:
     subject: str
     admin: bool = False
-    scopes: frozenset = frozenset()
+    scopes: frozenset[str] = frozenset()
     method: str = "none"
 
 
 class Authentication:
-    def __init__(self, settings):
+    def __init__(self, settings: Settings) -> None:
         self.settings = settings
         settings.require_auth()
         self.jwks = (
@@ -28,7 +31,7 @@ class Authentication:
             else None
         )
 
-    def authenticate(self, request):
+    def authenticate(self, request: Request) -> Identity:
         settings = self.settings
         authorization = request.headers.get("authorization", "")
         scheme, _, credential = authorization.partition(" ")
@@ -66,7 +69,7 @@ class Authentication:
                     options={"require": ["exp", "sub", "iss", "aud"]},
                 )
                 subject = claims["sub"]
-                scopes = claims.get("scope", "").split()
+                scopes = _token_scopes(claims)
                 if not isinstance(subject, str) or not subject:
                     raise ValueError("Invalid subject")
                 identity = Identity(
@@ -94,3 +97,16 @@ class Authentication:
         if settings.dev and not authorization and not token:
             return Identity("development", True)
         raise APIError(401, "Valid authentication is required")
+
+
+def _token_scopes(claims: dict[str, Any]) -> set[str]:
+    raw_scope = claims.get("scope", claims.get("scp", ""))
+    if isinstance(raw_scope, str):
+        return {scope for scope in raw_scope.split() if scope}
+    if isinstance(raw_scope, list):
+        return {
+            scope
+            for scope in cast(list[object], raw_scope)
+            if isinstance(scope, str) and scope
+        }
+    return set()

@@ -32,7 +32,7 @@ Create the credentials Secret separately in the instance namespace. Confirm the 
 
 ## Recover into a new instance
 
-Create a new instance name with the same version and a separate database. Set `backends.db.cnpg.restore.enabled: true`, `source` to the original CNPG server name (normally `<old-instance>-db`), and `objectStore` to the source archive. Supply `targetTime` for a point-in-time recovery, or omit it to recover to the latest available point. Keep the original instance and backups intact.
+Create a new instance name with a separate database and the operator/runtime builds matching the backup's schema history. A version label alone is insufficient for development builds. Check the [changelog](../../CHANGELOG.md) for migration prerequisites before selecting an image. Set `backends.db.cnpg.restore.enabled: true`, `source` to the original CNPG server name (normally `<old-instance>-db`), and `objectStore` to the source archive. Supply `targetTime` for a point-in-time recovery, or omit it to recover to the latest available point. Keep the original instance and backups intact.
 
 ```yaml
 restore:
@@ -56,7 +56,7 @@ For external PostgreSQL, create a new URI Secret for the recovered database. Set
 
 With deletion protection disabled and `deletionPolicy: Retain`, deleting the Tadoss resource detaches both its CNPG Cluster and ScheduledBackup. CNPG keeps the database, CA/application Secrets, WAL archival and scheduled base backups running. Preserve object-store credentials and the namespace. The administrator owns these retained resources; namespace deletion removes them regardless of Retain.
 
-A new managed instance does not adopt an existing Cluster, including one with the same name. Connect a new instance through the external provider. In the original namespace, copy the public CA to a ConfigMap and refer to the retained application URI Secret:
+A new managed instance does not adopt an existing Cluster, including one with the same name. Connect a new instance through the external provider using builds compatible with the retained database's schema history. The same [migration prerequisites](../../CHANGELOG.md) apply to retained databases and restored backups. In the original namespace, copy the public CA to a ConfigMap and refer to the retained application URI Secret:
 
 ```sh
 kubectl -n tads get secret archive-db-ca -o jsonpath='{.data.ca\.crt}' | base64 -d > retained-ca.pem

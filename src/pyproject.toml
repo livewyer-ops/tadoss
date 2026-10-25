@@ -10,7 +10,8 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
 dependencies = [
-    "fastapi>=0.115,<1",
+    "anyio>=4,<5",
+    "fastapi>=0.121,<1",
     "uvicorn>=0.34,<1",
     "jsonschema>=4.23,<5",
     "mediatimestamp>=5.2,<6",
@@ -39,7 +40,7 @@ dev = [
     "httpx>=0.28,<1",
     "pyright>=1.1,<2",
     "pyyaml>=6,<7",
-    "pytest>=8,<10",
+    "pytest>=9,<10",
     "ruff>=0.12,<1",
 ]
 
@@ -65,12 +66,20 @@ ignore = ["TD003"]
 
 [tool.ruff.lint.per-file-ignores]
 "**/tests/**" = ["S101", "S105", "S106"]
+"**/operator/test/**" = ["S101"]
 
 [tool.coverage.run]
 source = ["tadoss"]
 branch = true
-omit = ["tadoss/__main__.py"]
+omit = ["*/tadoss/__main__.py"]
 
 [tool.pyright]
 typeCheckingMode = "basic"
 include = ["app/tadoss"]
+extraPaths = ["app"]
+strict = [
+    "app/tadoss/auth.py",
+    "app/tadoss/application/records.py",
+    "app/tadoss/application/events.py",
+    "app/tadoss/api/dependencies.py",
+]

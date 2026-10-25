@@ -8,12 +8,14 @@ import ssl
 import threading
 import time
 from contextlib import suppress
-from urllib.parse import urlsplit
+from urllib.parse import SplitResult, urlsplit
 
+from tadoss.domain.types import Document
 from tadoss.domain.validation import APIError
+from tadoss.settings import Settings
 
 
-def allowed(host, settings):
+def allowed(host: str, settings: Settings) -> bool:
     return any(
         host == value or (value.startswith(".") and host.endswith(value))
         for value in settings.webhook_allowed_hosts.lower().split(",")
@@ -21,7 +23,7 @@ def allowed(host, settings):
     )
 
 
-def validate_url(url, settings):
+def validate_url(url: str, settings: Settings) -> SplitResult:
     try:
         parsed = urlsplit(url)
         port = parsed.port
@@ -54,8 +56,12 @@ def validate_url(url, settings):
         raise APIError(400, "Invalid or restricted webhook destination") from None
 
 
-def deliver(url, body, header, secret, settings):
+def deliver(
+    url: str, body: Document, header: str, secret: str, settings: Settings
+) -> int:
     parsed = validate_url(url, settings)
+    if parsed.hostname is None:
+        raise APIError(400, "Webhook destination has no hostname")
     host = parsed.hostname.lower().rstrip(".")
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
@@ -74,28 +80,41 @@ def deliver(url, body, header, secret, settings):
     deadline = time.monotonic() + settings.webhook_timeout_seconds
     expired = threading.Event()
     socket_lock = threading.Lock()
-    family, socktype, protocol, _, address = addresses[0]
-    connection.sock = socket.socket(family, socktype, protocol)
-    active_socket = connection.sock
+    active_socket: socket.socket | None = None
 
-    def remaining():
+    def remaining() -> float:
         budget = deadline - time.monotonic()
         if expired.is_set() or budget <= 0:
             raise TimeoutError("Webhook deadline exceeded")
         return budget
 
-    def interrupt():
+    def interrupt() -> None:
         expired.set()
         # shutdown interrupts blocked reads/writes without recycling the fd.
         with socket_lock, suppress(OSError):
-            active_socket.shutdown(socket.SHUT_RDWR)
+            if active_socket is not None:
+                active_socket.shutdown(socket.SHUT_RDWR)
 
     timer = threading.Timer(settings.webhook_timeout_seconds, interrupt)
     timer.daemon = True
     timer.start()
     try:
-        connection.sock.settimeout(remaining())
-        connection.sock.connect(address)
+        for index, (family, socktype, protocol, _, address) in enumerate(addresses):
+            try:
+                with socket_lock:
+                    remaining()
+                    connection.sock = socket.socket(family, socktype, protocol)
+                    active_socket = connection.sock
+                connection.sock.settimeout(remaining())
+                connection.sock.connect(address)
+                break
+            except OSError:
+                with socket_lock:
+                    connection.close()
+                    active_socket = None
+                remaining()
+                if index == len(addresses) - 1:
+                    raise
         if parsed.scheme == "https":
             context = ssl.create_default_context()
             with socket_lock:
@@ -116,7 +135,7 @@ def deliver(url, body, header, secret, settings):
         connection.request("POST", path, json.dumps(body).encode(), headers)
         response = connection.getresponse()
         status = response.status
-        response.read(65536)
+        response.close()
         remaining()
         if 300 <= status < 400:
             raise APIError(400, "Webhook redirects are not permitted")

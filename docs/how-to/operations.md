@@ -17,6 +17,8 @@ CNPG `instances` is independent of API/worker replicas. Multi-server defaults ne
 
 Inspect `status.schemaJob` and its logs, fix the reported connection, schema or resource problem, then change `spec.schemaRetryNonce` to a new value. The operator creates a new immutable Job and waits for it before updating workloads. Database credentials or CA object revisions also create a new Job. Migration is idempotent for the selected schema target.
 
+An incompatible migration history needs the database preparation described in the [changelog](../../CHANGELOG.md); retrying the Job cannot convert it.
+
 ## Instance boundaries
 
 Each instance owns its API, worker, migration Job and managed database in its namespace. Use separate namespaces, credentials and databases for separate trust domains. A shared external database shares the data visible through its connections; two instances pointed at the same schema do not isolate tenants. Platform controllers and the TADOSS operator are cluster infrastructure.

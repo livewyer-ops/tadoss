@@ -3,12 +3,15 @@
 import copy
 import time
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import uuid4
 
 from psycopg import errors, sql
 from psycopg.types.json import Jsonb
 
 from tadoss.adapters import postgres as store
+from tadoss.auth import Identity
+from tadoss.domain.types import Document, Job, Options
 from tadoss.domain.validation import (
     SPEC,
     APIError,
@@ -18,10 +21,14 @@ from tadoss.domain.validation import (
     storage_safe,
     time_range,
     validate,
+    writable,
 )
+from tadoss.settings import Settings
 
 
-def enqueue(db, kind, aggregate, owner, payload):
+def enqueue(
+    db: store.Database, kind: str, aggregate: str, owner: str, payload: Document
+) -> str:
     identifier = str(uuid4())
     db.execute(
         "INSERT INTO jobs (id, kind, aggregate_id, owner, payload) VALUES "
@@ -31,7 +38,9 @@ def enqueue(db, kind, aggregate, owner, payload):
     return identifier
 
 
-def publish(db, event_type, resource, event):
+def publish(
+    db: store.Database, event_type: str, resource: Document, event: Document
+) -> None:
     body = {"event_timestamp": now(), "event_type": event_type, "event": event}
     validate(
         body,
@@ -39,45 +48,43 @@ def publish(db, event_type, resource, event):
             "application/json"
         ]["schema"],
     )
-    # A server cursor bounds memory even when a service has many subscribers.
-    with db.connection.cursor(name="webhook_subscribers_" + uuid4().hex) as subscribers:
-        subscribers.execute(
-            "SELECT id, owner, document, revision FROM webhooks WHERE "
-            "document->>'status' IN ('created','started') AND "
-            "(document->'events') ? %s",
-            (event_type,),
-        )
-        for identifier, owner, webhook, revision in subscribers:
-            is_track = event_type.startswith("tracks/")
-            values = {
-                "schema_ids": resource["schema_id"] if is_track else resource["id"]
+    where = sql.SQL(
+        "document->>'status' IN ('created','started') AND (document->'events') ? %s"
+    )
+    params: list[Any] = [Jsonb(body), event_type]
+    is_track = event_type.startswith("tracks/")
+    values = {"schema_ids": resource["schema_id"] if is_track else resource["id"]}
+    if is_track:
+        values.update(
+            {
+                "track_ids": resource["id"],
+                "timeline_reference.entity_id": resource["timeline_reference"][
+                    "entity_id"
+                ],
             }
-            if is_track:
-                values.update(
-                    {
-                        "track_ids": resource["id"],
-                        "timeline_reference.entity_id": resource["timeline_reference"][
-                            "entity_id"
-                        ],
-                    }
-                )
-            if any(
-                key in webhook and value not in webhook[key]
-                for key, value in values.items()
-            ):
-                continue
-            if (
-                is_track
-                and "editable_events" in webhook
-                and webhook["editable_events"] != resource["editable_events"]
-            ):
-                continue
-            enqueue(
-                db, "webhook", identifier, owner, {"body": body, "revision": revision}
-            )
+        )
+    for key, value in values.items():
+        where += sql.SQL(" AND (NOT document ? %s OR (document->%s) ? %s)")
+        params.extend([key, key, value])
+    if is_track:
+        where += sql.SQL(
+            " AND (NOT document ? 'editable_events' OR"
+            " document->'editable_events' = %s)"
+        )
+        params.append(Jsonb(resource["editable_events"]))
+    # PostgreSQL selects subscribers and copies the shared body in one statement.
+    db.execute(
+        sql.SQL(
+            "INSERT INTO jobs (id, kind, aggregate_id, owner, payload)"
+            " SELECT gen_random_uuid()::text, 'webhook', id, owner,"
+            " jsonb_build_object('body', %s::jsonb, 'revision', revision)"
+            " FROM webhooks WHERE {}"
+        ).format(where),
+        params,
+    )
 
 
-def webhook_get(db, identifier, identity):
+def webhook_get(db: store.Database, identifier: str, identity: Identity) -> Document:
     row = db.execute(
         "SELECT owner, document FROM webhooks WHERE id=%s", (identifier,)
     ).fetchone()
@@ -86,7 +93,14 @@ def webhook_get(db, identifier, identity):
     return row[1]
 
 
-def webhook_save(db, identifier, body, identity, settings, replacing=False):
+def webhook_save(
+    db: store.Database,
+    identifier: str,
+    body: Any,
+    identity: Identity,
+    settings: Settings,
+    replacing: bool = False,
+) -> Document:
     from tadoss.adapters.webhook_delivery import validate_url
 
     old = webhook_get(db, identifier, identity) if replacing else None
@@ -123,11 +137,11 @@ def webhook_save(db, identifier, body, identity, settings, replacing=False):
     document.update(id=identifier, status=body.get("status", "created"))
     if old and old["status"] == "error" and document["status"] == "disabled":
         raise APIError(400, "Re-enable an errored webhook before disabling it")
-    if replacing:
+    if old is not None:
         if "api_key_value" not in body:
             secret = db.execute(
                 "SELECT api_key_value FROM webhooks WHERE id=%s", (identifier,)
-            ).fetchone()[0]
+            ).fetchall()[0][0]
         db.execute(
             "UPDATE webhooks SET document=%s, api_key_value=%s, "
             "revision=revision+%s WHERE id=%s",
@@ -147,7 +161,7 @@ def webhook_save(db, identifier, body, identity, settings, replacing=False):
     return document
 
 
-def webhook_selection(document):
+def webhook_selection(document: Document) -> tuple[Any, ...]:
     # Membership order and credentials do not change which notifications match.
     return (
         document["url"],
@@ -165,7 +179,7 @@ def webhook_selection(document):
     )
 
 
-def ensure_track_available(db, identifier):
+def ensure_track_available(db: store.Database, identifier: str) -> None:
     if db.execute(
         "SELECT 1 FROM jobs WHERE kind='delete' AND aggregate_id=%s AND status IN"
         " ('created','started') AND "
@@ -175,7 +189,9 @@ def ensure_track_available(db, identifier):
         raise APIError(409, "Track is reserved for deletion")
 
 
-def deletion_where(track_id, options, cutoff=None):
+def deletion_where(
+    track_id: str, options: Options, cutoff: int | None = None
+) -> tuple[sql.Composed, list[Any]]:
     decoded = dict(options)
     if "timerange" in decoded:
         decoded["timerange"] = time_range(str(decoded["timerange"]))
@@ -186,7 +202,13 @@ def deletion_where(track_id, options, cutoff=None):
     return where, params
 
 
-def selected_events(db, track_id, options, limit, cutoff=None):
+def selected_events(
+    db: store.Database,
+    track_id: str,
+    options: Options,
+    limit: int,
+    cutoff: int | None = None,
+) -> list[Document]:
     where, params = deletion_where(track_id, options, cutoff)
     return [
         row[0]
@@ -199,7 +221,7 @@ def selected_events(db, track_id, options, limit, cutoff=None):
     ]
 
 
-def delete_batch(db, track, records):
+def delete_batch(db: store.Database, track: Document, records: list[Document]) -> None:
     if not records:
         return
     identifiers = [record["id"] for record in records]
@@ -221,8 +243,15 @@ def delete_batch(db, track, records):
     )
 
 
-def request_delete(db, track, options, delete_track, identity, settings):
-    store.writable(track)
+def request_delete(
+    db: store.Database,
+    track: Document,
+    options: Options,
+    delete_track: bool,
+    identity: Identity,
+    settings: Settings,
+) -> Document | None:
+    writable(track)
     ensure_track_available(db, track["id"])
     deadline = time.monotonic() + settings.delete_sync_seconds
     try:
@@ -254,7 +283,7 @@ def request_delete(db, track, options, delete_track, identity, settings):
     )
     cutoff = db.execute(
         "SELECT COALESCE(max(mutation),0) FROM events WHERE track_id=%s", (track["id"],)
-    ).fetchone()[0]
+    ).fetchall()[0][0]
     timestamp = now()
     timerange = str(options.get("timerange", "_"))
     request = {
@@ -276,7 +305,7 @@ def request_delete(db, track, options, delete_track, identity, settings):
     return {**request, "id": identifier}
 
 
-def delete_document(row):
+def delete_document(row: tuple[Any, ...]) -> Document:
     identifier, payload, status, updated, expiry, error = row
     result = {
         **payload["request"],
@@ -293,7 +322,7 @@ def delete_document(row):
     return result
 
 
-def get_delete(db, identifier):
+def get_delete(db: store.Database, identifier: str) -> Document:
     row = db.execute(
         "SELECT id,payload,status,updated,expiry,error FROM jobs WHERE id=%s AND "
         "kind='delete'",
@@ -304,7 +333,7 @@ def get_delete(db, identifier):
     return delete_document(row)
 
 
-def claim(pool, settings):
+def claim(pool: store.Pool, settings: Settings) -> Job | None:
     token = str(uuid4())
     with store.transaction(pool, write=True) as db:
         row = db.execute(
@@ -324,8 +353,15 @@ def claim(pool, settings):
 
 
 def finish(
-    db, identifier, token, status, settings, error=None, delay=0, reset_attempts=False
-):
+    db: store.Database,
+    identifier: str,
+    token: str,
+    status: str,
+    settings: Settings,
+    error: Document | None = None,
+    delay: int = 0,
+    reset_attempts: bool = False,
+) -> bool:
     expiry = (
         datetime.now(UTC) + timedelta(seconds=settings.worker_queue_retention_seconds)
         if status in {"done", "error"} and settings.worker_queue_retention_seconds
@@ -352,7 +388,7 @@ def finish(
     )
 
 
-def process_delete(pool, job, settings):
+def process_delete(pool: store.Pool, job: Job, settings: Settings) -> None:
     identifier, _, track_id, payload, _, token = job
     with store.transaction(pool, write=True, lock=track_id) as db:
         if not db.execute(
@@ -405,6 +441,8 @@ def process_delete(pool, job, settings):
                 ).format(where),
                 params,
             ).fetchone()
+            if first is None or last is None:
+                raise RuntimeError("Track changed during deletion query")
             payload["request"]["timerange_remaining"] = str(
                 store.sort_keys_timerange(*first, *last)
             )
@@ -422,7 +460,7 @@ def process_delete(pool, job, settings):
             raise RuntimeError("Deletion lease expired; roll back this batch")
 
 
-def list_deletes(db, options):
+def list_deletes(db: store.Database, options: Options) -> list[Document]:
     import base64
     import binascii
     import json

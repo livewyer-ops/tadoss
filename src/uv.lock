@@ -1319,6 +1319,7 @@ wheels = [
 name = "tadoss"
 source = { editable = "." }
 dependencies = [
+    { name = "anyio" },
     { name = "asgi-correlation-id" },
     { name = "fastapi" },
     { name = "httpx" },
@@ -1351,8 +1352,9 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anyio", specifier = ">=4,<5" },
     { name = "asgi-correlation-id", specifier = ">=4,<5" },
-    { name = "fastapi", specifier = ">=0.115,<1" },
+    { name = "fastapi", specifier = ">=0.121,<1" },
     { name = "httpx", specifier = ">=0.28,<1" },
     { name = "jsonschema", specifier = ">=4.23,<5" },
     { name = "mediatimestamp", specifier = ">=5.2,<6" },
@@ -1373,7 +1375,7 @@ dev = [
     { name = "coverage", specifier = ">=7,<8" },
     { name = "httpx", specifier = ">=0.28,<1" },
     { name = "pyright", specifier = ">=1.1,<2" },
-    { name = "pytest", specifier = ">=8,<10" },
+    { name = "pytest", specifier = ">=9,<10" },
     { name = "pyyaml", specifier = ">=6,<7" },
     { name = "ruff", specifier = ">=0.12,<1" },
 ]

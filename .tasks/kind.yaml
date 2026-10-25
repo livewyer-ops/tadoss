@@ -2,30 +2,95 @@ version: '3'
 vars:
   RUNTIME_IMAGE: '{{.RUNTIME_IMAGE | default ""}}'
   OPERATOR_IMAGE: '{{.OPERATOR_IMAGE | default ""}}'
+  KIND_API_IMAGE: '{{.RUNTIME_IMAGE | default (printf "livewyer/tadoss-api:%s" .IMAGE_TAG)}}'
+  KIND_OPERATOR_IMAGE: '{{.OPERATOR_IMAGE | default (printf "livewyer/tadoss-operator:%s" .IMAGE_TAG)}}'
+  KIND_ENV: '{{.ROOT_DIR}}/.local/environments/{{.CLUSTER}}-{{.PROFILE}}'
   HTTP_PORT: '{{.HTTP_PORT | default "18080"}}'
   HTTPS_PORT: '{{.HTTPS_PORT | default "18443"}}'
-  KIND_ENV: '{{.ROOT_DIR}}/.local/environments/{{.CLUSTER}}-{{.PROFILE}}'
 tasks:
+  prepare:
+    internal: true
+    preconditions:
+      - sh: command -v curl
+        msg: curl is required for verified HTTPS ingress checks
+      - sh: printf '%s' {{.CLUSTER | shellQuote}} | grep -Eq '^[a-z0-9]+(-[a-z0-9]+)*$'
+        msg: CLUSTER must contain lowercase letters, digits and separating hyphens
+      - sh: test -z {{printf "%s%s" .RUNTIME_IMAGE .OPERATOR_IMAGE | shellQuote}} || { test -n {{.RUNTIME_IMAGE | shellQuote}} && test -n {{.OPERATOR_IMAGE | shellQuote}}; }
+        msg: Supply both RUNTIME_IMAGE and OPERATOR_IMAGE, or neither to build locally
+      - sh: PROFILE={{.PROFILE | shellQuote}} yq -e 'has(strenv(PROFILE))' deploy/profiles.yaml
+        msg: Unknown deployment profile
+      - sh: KIND_API_IMAGE={{.KIND_API_IMAGE | shellQuote}} KIND_OPERATOR_IMAGE={{.KIND_OPERATOR_IMAGE | shellQuote}} yq -n -e '(strenv(KIND_API_IMAGE) | test("^[^@]+@sha256:[a-f0-9]{64}$|^[^@]+:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")) and (strenv(KIND_OPERATOR_IMAGE) | test("^[^@]+@sha256:[a-f0-9]{64}$|^[^@]+:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$"))'
+        msg: Images must have an explicit tag or SHA256 digest
+      - sh: test {{.HTTP_PORT | shellQuote}} -ge 1024 && test {{.HTTP_PORT | shellQuote}} -le 65535 && test {{.HTTPS_PORT | shellQuote}} -ge 1024 && test {{.HTTPS_PORT | shellQuote}} -le 65535 && test {{.HTTP_PORT | shellQuote}} != {{.HTTPS_PORT | shellQuote}}
+        msg: Host ports must be distinct numbers between 1024 and 65535
+    cmds:
+      - mkdir -p .local/environments
+      - 'HTTP_PORT={{.HTTP_PORT | shellQuote}} HTTPS_PORT={{.HTTPS_PORT | shellQuote}} yq ''.nodes[0].extraPortMappings[0].hostPort = env(HTTP_PORT) | .nodes[0].extraPortMappings[1].hostPort = env(HTTPS_PORT)'' "$(PROFILE={{.PROFILE | shellQuote}} yq -r ''.[strenv(PROFILE)].kindConfig'' deploy/profiles.yaml)" > {{printf ".local/%s-kind.yaml" .CLUSTER | shellQuote}}'
+      - |
+        if [ ! -d {{.KIND_ENV | shellQuote}} ]; then
+          cp -R deploy/environments/{{.PROFILE | shellQuote}} {{.KIND_ENV | shellQuote}}
+          cp deploy/kind/platform-values.yaml {{.KIND_ENV | shellQuote}}/platform-values.yaml
+          OPERATOR_BASE=$(realpath --relative-to={{.KIND_ENV | shellQuote}}/operator {{.ROOT_DIR | shellQuote}}/deploy/operator) \
+            yq -i '.resources = [strenv(OPERATOR_BASE)]' {{.KIND_ENV | shellQuote}}/operator/kustomization.yaml
+          yq -i '.clusterIssuer = "tadoss-selfsigned"' {{.KIND_ENV | shellQuote}}/operator/defaults.yaml
+        fi
+      - cd {{.KIND_ENV | shellQuote}}/operator && kustomize edit set image {{printf "livewyer/tadoss-operator=%s" .KIND_OPERATOR_IMAGE | shellQuote}}
+      - |
+        {{if contains "@sha256:" .RUNTIME_IMAGE}}
+        yq -i 'del(.spec.api.image)' {{.KIND_ENV | shellQuote}}/instances/tadoss/tadoss.yaml
+        {{else}}
+        KIND_API_IMAGE={{.KIND_API_IMAGE | shellQuote}} yq -i '.spec.api.image = strenv(KIND_API_IMAGE)' {{.KIND_ENV | shellQuote}}/instances/tadoss/tadoss.yaml
+        {{end}}
+  build:
+    internal: true
+    status: ['test -n {{.RUNTIME_IMAGE | shellQuote}}']
+    cmds:
+      - task: :images:build
+        vars: {IMAGE_TAG: '{{.IMAGE_TAG}}'}
+  load:
+    internal: true
+    cmds:
+      - task: build
+      - mkdir -p reports/{{.PROFILE | shellQuote}}
+      - |
+        if docker image inspect {{.KIND_API_IMAGE | shellQuote}} {{.KIND_OPERATOR_IMAGE | shellQuote}} > reports/{{.PROFILE | shellQuote}}/images.json 2>/dev/null; then
+          kind load docker-image --name {{.CLUSTER | shellQuote}} {{.KIND_API_IMAGE | shellQuote}} {{.KIND_OPERATOR_IMAGE | shellQuote}}
+        else
+          rm reports/{{.PROFILE | shellQuote}}/images.json
+        fi
   up:
     desc: Create a disposable Kind installation for PROFILE
     cmds:
-      - mkdir -p .local
-      - 'if [ -z "{{.RUNTIME_IMAGE}}" ]; then task images:build; fi'
-      - uv run --project src python scripts/kind_config.py --profile {{.PROFILE}} --http-port {{.HTTP_PORT}} --https-port {{.HTTPS_PORT}} --output .local/{{.CLUSTER}}-kind.yaml
-      - kind get clusters | grep -qx '{{.CLUSTER}}' || kind create cluster --name {{.CLUSTER}} --config .local/{{.CLUSTER}}-kind.yaml --kubeconfig {{.KUBECONFIG}}
-      - kind export kubeconfig --name {{.CLUSTER}} --kubeconfig {{.KUBECONFIG}}
-      - 'if [ -z "{{.RUNTIME_IMAGE}}" ]; then kind load docker-image --name {{.CLUSTER}} livewyer/tadoss-api:{{.IMAGE_TAG}} livewyer/tadoss-operator:{{.IMAGE_TAG}}; fi'
-      - uv run --project src python scripts/kind_environment.py --directory {{.KIND_ENV}} --profile {{.PROFILE}} --tag {{.IMAGE_TAG}} --runtime-image "{{.RUNTIME_IMAGE}}" --operator-image "{{.OPERATOR_IMAGE}}"
-      - '{{.ENV_COMMAND}} apply --directory {{.KIND_ENV}} --kubeconfig {{.KUBECONFIG}}'
-      - '{{.ENV_COMMAND}} wait --directory {{.KIND_ENV}} --kubeconfig {{.KUBECONFIG}}'
+      - task: prepare
+      - kind get clusters | grep -qx {{.CLUSTER | shellQuote}} || kind create cluster --name {{.CLUSTER | shellQuote}} --config {{printf ".local/%s-kind.yaml" .CLUSTER | shellQuote}} --kubeconfig {{.KUBECONFIG | shellQuote}}
+      - kind export kubeconfig --name {{.CLUSTER | shellQuote}} --kubeconfig {{.KUBECONFIG | shellQuote}}
+      - task: load
+      - task: :env:apply
+        vars: {ENV_DIR: '{{.KIND_ENV}}'}
+      - task: :env:wait
+        vars: {ENV_DIR: '{{.KIND_ENV}}'}
   test:
     desc: Qualify the selected profile, including strict idempotence
     cmds:
       - task: up
-      - '{{.ENV_COMMAND}} diff --strict --directory {{.KIND_ENV}} --kubeconfig {{.KUBECONFIG}}'
-      - uv run --project src python scripts/deployed_test.py --kubeconfig {{.KUBECONFIG}} --expected-image "{{.RUNTIME_IMAGE}}" --https-port {{.HTTPS_PORT}}
-      - mkdir -p reports/{{.PROFILE}}
-      - 'KUBECONFIG={{.KUBECONFIG}} chainsaw test --config operator/test/chainsaw/configuration.yaml --test-dir operator/test/chainsaw --set-string apiImage={{if .RUNTIME_IMAGE}}{{.RUNTIME_IMAGE}}{{else}}livewyer/tadoss-api:{{.IMAGE_TAG}}{{end}} --report-path reports/{{.PROFILE}} {{if ne .PROFILE "multi-server"}}--selector "test.tadoss.io/profile!=multi-server"{{end}}'
+      - task: :env:diff
+        vars: {ENV_DIR: '{{.KIND_ENV}}', STRICT: 'true'}
+      - mkdir -p reports/{{.PROFILE | shellQuote}}
+      - 'KUBECONFIG={{.KUBECONFIG | shellQuote}} chainsaw test --config operator/test/chainsaw/configuration.yaml --test-dir operator/test/chainsaw --set-string apiImage={{.KIND_API_IMAGE | shellQuote}} --report-path reports/{{.PROFILE | shellQuote}} {{if ne .PROFILE "multi-server"}}--selector "test.tadoss.io/profile!=multi-server"{{end}}'
+      - task: qualify
+  qualify:
+    internal: true
+    cmds:
+      - 'KUBECONFIG={{.KUBECONFIG | shellQuote}} chainsaw test --config operator/test/chainsaw/configuration.yaml --test-dir tests/deployed --namespace tads --set-string apiImage={{.KIND_API_IMAGE | shellQuote}} --report-path reports/{{.PROFILE | shellQuote}} --report-name deployed'
+      - |
+        secret=$(kubectl --kubeconfig {{.KUBECONFIG | shellQuote}} -n tads get ingress tadoss-api -o jsonpath='{.spec.tls[0].secretName}')
+        kubectl --kubeconfig {{.KUBECONFIG | shellQuote}} -n tads get secret "$secret" -o jsonpath='{.data.ca\.crt}' | base64 -d > {{printf ".local/%s-ca.pem" .CLUSTER | shellQuote}}
+        host=$(kubectl --kubeconfig {{.KUBECONFIG | shellQuote}} -n tads get ingress tadoss-api -o jsonpath='{.spec.rules[0].host}')
+        status=$(curl --fail --silent --show-error --retry 30 --retry-all-errors --retry-delay 2 --max-time 10 --retry-max-time 120 \
+          --max-filesize 65536 --output /dev/null --write-out '%{http_code}' \
+          --cacert {{printf ".local/%s-ca.pem" .CLUSTER | shellQuote}} --resolve "$host:{{.HTTPS_PORT}}:127.0.0.1" "https://$host:{{.HTTPS_PORT}}/readyz")
+        test "$status" = 200
+        printf 'Verified HTTPS ingress returned %s\n' "$status"
   down:
     desc: Delete the selected disposable Kind cluster
-    cmds: ['kind delete cluster --name {{.CLUSTER}}']
+    cmds: ['kind delete cluster --name {{.CLUSTER | shellQuote}} --kubeconfig {{.KUBECONFIG | shellQuote}}']

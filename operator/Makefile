@@ -1,4 +1,4 @@
-.PHONY: generate test lint vet build envtest
+.PHONY: generate test lint fmt vet build envtest
 
 CONTROLLER_GEN ?= controller-gen
 KUSTOMIZE ?= kustomize
@@ -20,10 +20,15 @@ envtest: $(ENVTEST)
 
 # Runs the unit tests and, with a kube-apiserver from setup-envtest, the reconcile tests.
 test: envtest
-	KUBEBUILDER_ASSETS="$$($(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test -race -count=1 ./...
+	mkdir -p ../reports
+	KUBEBUILDER_ASSETS="$$($(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test -race -count=1 -coverpkg=./... -coverprofile=../reports/go-coverage.out ./...
+	go tool cover -func=../reports/go-coverage.out > ../reports/go-coverage.txt
 
 vet:
 	go vet ./...
+
+fmt:
+	golangci-lint fmt ./...
 
 lint:
 	golangci-lint run ./...

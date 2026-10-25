@@ -3,13 +3,18 @@
 import logging
 import logging.config
 import os
+from typing import Any
+
+from fastapi import FastAPI
+from psycopg import Connection
+from starlette.types import Scope
 
 from . import __version__
 
 logger = logging.getLogger("tadoss")
 
 
-def configure_logging(level=None, encoding=None):
+def configure_logging(level: str | None = None, encoding: str | None = None) -> None:
     """Send every logger to stdout with the request id, as JSON or text."""
     level = (level or os.getenv("TADOSS_LOG_LEVEL", "info")).upper()
     encoding = encoding or os.getenv("TADOSS_LOG_FORMAT", "json")
@@ -57,7 +62,7 @@ def configure_logging(level=None, encoding=None):
     )
 
 
-def instrument(app):
+def instrument(app: FastAPI) -> bool:
     """Export traces and metrics when OTEL_EXPORTER_OTLP_ENDPOINT is set."""
     if getattr(app.state, "telemetry", None):
         return True
@@ -106,7 +111,7 @@ def instrument(app):
     return True
 
 
-def redact_query(span, scope):
+def redact_query(span: Any, scope: Scope) -> None:
     """Keep query strings, which may carry a bearer token, out of server spans."""
     attributes = getattr(span, "attributes", None) or {}
     path = scope.get("path", "")
@@ -117,7 +122,7 @@ def redact_query(span, scope):
         span.set_attribute("url.query", "")
 
 
-def instrument_connection(connection, app):
+def instrument_connection(connection: Connection[Any], app: FastAPI) -> None:
     providers = getattr(app.state, "telemetry", None)
     if providers:
         from opentelemetry.instrumentation.psycopg import PsycopgInstrumentor
@@ -127,7 +132,7 @@ def instrument_connection(connection, app):
         )
 
 
-def shutdown(app):
+def shutdown(app: FastAPI) -> None:
     providers = getattr(app.state, "telemetry", None)
     if providers:
         providers[0].shutdown()

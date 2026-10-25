@@ -3,10 +3,13 @@ import binascii
 import json
 import math
 from decimal import Decimal, InvalidOperation
+from typing import Any
 
-from fastapi.responses import JSONResponse
+from fastapi import Request
+from fastapi.responses import JSONResponse, Response
 
 from tadoss.adapters import postgres as store
+from tadoss.domain.types import Document, EventCursor, Options
 from tadoss.domain.validation import (
     SPEC,
     APIError,
@@ -18,14 +21,14 @@ from tadoss.domain.validation import (
 )
 
 
-def finite_float(value):
+def finite_float(value: str) -> float:
     number = float(value)
     if not math.isfinite(number):
         raise ValueError("JSON numbers must be finite")
     return number
 
 
-def resolve(value):
+def resolve(value: Document) -> Document:
     if "$ref" in value:
         result = SPEC
         for part in value["$ref"].removeprefix("#/").split("/"):
@@ -34,7 +37,7 @@ def resolve(value):
     return value
 
 
-def query_options(request, path, method):
+def query_options(request: Request, path: str, method: str) -> Options:
     options = {}
     definitions = [
         resolve(item) for item in SPEC["paths"][path][method].get("parameters", [])
@@ -86,7 +89,7 @@ def query_options(request, path, method):
     return options
 
 
-def next_link(request, cursor):
+def next_link(request: Request, cursor: str) -> dict[str, str]:
     # Relative links avoid trusting a caller-supplied Host header, and the URL
     # token is never reflected back to the client.
     url = (
@@ -97,7 +100,7 @@ def next_link(request, cursor):
     return {"X-Paging-NextKey": cursor, "Link": f'<{url}>; rel="next"'}
 
 
-def encode_cursor(key, reverse):
+def encode_cursor(key: EventCursor, reverse: bool) -> str:
     payload = {
         "v": 2,
         "r": reverse,
@@ -108,7 +111,7 @@ def encode_cursor(key, reverse):
     ).decode()
 
 
-def decode_cursor(page, reverse):
+def decode_cursor(page: str | None, reverse: bool) -> EventCursor | None:
     if page is None:
         return None
     try:
@@ -134,7 +137,9 @@ def decode_cursor(page, reverse):
         raise APIError(400, "Invalid page cursor") from exc
 
 
-def event_page(request, db, track_id, options):
+def event_page(
+    request: Request, db: store.Database, track_id: str, options: Options
+) -> Response:
     limit = min(options.get("limit", 100), 1000)
     reverse = options.get("reverse_order", False)
     rows = store.events(
@@ -154,10 +159,12 @@ def event_page(request, db, track_id, options):
     }
     if len(rows) > limit:
         headers.update(next_link(request, encode_cursor(rows[limit - 1][1], reverse)))
-    return JSONResponse(page, headers=headers)
+    return read_response(request, page, headers=headers)
 
 
-def paged(request, records, options, deletion=False):
+def paged(
+    request: Request, records: list[Document], options: Options, deletion: bool = False
+) -> Response:
     limit = min(options.get("limit", 100), 1000)
     page = records[:limit]
     headers = {"X-Paging-Limit": str(limit), "X-Paging-Count": str(len(page))}
@@ -174,4 +181,51 @@ def paged(request, records, options, deletion=False):
         )
         cursor = base64.urlsafe_b64encode(json.dumps(key).encode()).decode()
         headers.update(next_link(request, cursor))
-    return JSONResponse(page, headers=headers)
+    return read_response(request, page, headers=headers)
+
+
+def read_response(
+    request: Request, value: Any, *, headers: dict[str, str] | None = None
+) -> Response:
+    response = JSONResponse(value, headers=headers)
+    if request.method == "HEAD":
+        response.body = b""
+    return response
+
+
+def collection_page(
+    request: Request, db: store.Database, table: str, options: Options
+) -> Response:
+    limit = min(options.get("limit", 100), 1000)
+    after = None
+    if cursor := options.get("page"):
+        try:
+            after = json.loads(base64.b64decode(cursor, altchars=b"-_", validate=True))
+            validate(after, contract_schema("uuid"))
+        except (ValueError, UnicodeError) as exc:
+            raise APIError(400, "Invalid page cursor") from exc
+    return paged(request, store.listing(db, table, options, limit + 1, after), options)
+
+
+def property_value(request: Request, document: Document) -> Any:
+    field = request.scope["route"].path.split("/")[3]
+    tag = request.path_params.get("name")
+    target, key = (document, field) if tag is None else (document["tags"], tag)
+    if key not in target:
+        raise APIError(404, "Property not found")
+    return target[key]
+
+
+def property_body(request: Request, body: Any) -> None:
+    operation = SPEC["paths"][request.scope["route"].path]["put"]
+    validate(body, operation["requestBody"]["content"]["application/json"]["schema"])
+
+
+def deletion_response(document: Document | None) -> Response:
+    if document is None:
+        return Response(status_code=204)
+    return JSONResponse(
+        document,
+        status_code=202,
+        headers={"Location": "/track-delete-requests/" + document["id"]},
+    )

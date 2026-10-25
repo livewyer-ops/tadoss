@@ -7,7 +7,7 @@ from .settings import Settings
 from .telemetry import configure_logging
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="TADOSS API, worker and database commands"
     )

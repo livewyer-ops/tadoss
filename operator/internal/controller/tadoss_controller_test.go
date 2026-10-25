@@ -46,7 +46,7 @@ func TestFinalizeReleasesWhenNamespaceTerminates(t *testing.T) {
 			cr := instance()
 			cr.Finalizers = []string{finalizer}
 			cr.Spec.DeletionProtection = ptr.To(true)
-			r := &TadossReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(cr).WithObjects(cr, tc.namespace).Build(), Scheme: scheme}
+			r := &TadossReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithIndex(&tadossv1.Tadoss{}, tadossReferenceIndex, tadossReferenceIndexValue).WithStatusSubresource(cr).WithObjects(cr, tc.namespace).Build(), Scheme: scheme}
 			result, err := r.handleDeletion(ctx, cr)
 			if err != nil {
 				t.Fatal(err)
@@ -71,7 +71,7 @@ func TestFinalizeReleasesWhenNamespaceTerminates(t *testing.T) {
 func TestNamespaceRequestsEnqueueInstances(t *testing.T) {
 	scheme := testScheme(t)
 	cr := instance()
-	r := &TadossReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(cr).Build(), Scheme: scheme}
+	r := &TadossReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithIndex(&tadossv1.Tadoss{}, tadossReferenceIndex, tadossReferenceIndexValue).WithObjects(cr).Build(), Scheme: scheme}
 	namespace := &metav1.PartialObjectMetadata{ObjectMeta: metav1.ObjectMeta{Name: "test"}}
 	requests := r.namespaceRequests(context.Background(), namespace)
 	if len(requests) != 1 || requests[0].NamespacedName != client.ObjectKeyFromObject(cr) {
@@ -85,7 +85,7 @@ func TestNamespaceRequestsEnqueueInstances(t *testing.T) {
 func TestSecretRequestsAcceptMetadata(t *testing.T) {
 	scheme := testScheme(t)
 	cr := instance()
-	r := &TadossReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(cr).Build(), Scheme: scheme}
+	r := &TadossReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithIndex(&tadossv1.Tadoss{}, tadossReferenceIndex, tadossReferenceIndexValue).WithObjects(cr).Build(), Scheme: scheme}
 	token := &metav1.PartialObjectMetadata{ObjectMeta: metav1.ObjectMeta{Name: "example-api-token", Namespace: "test"}}
 	if requests := r.secretRequests(context.Background(), token); len(requests) != 1 || requests[0].NamespacedName != client.ObjectKeyFromObject(cr) {
 		t.Fatalf("unexpected requests %v", requests)
@@ -115,14 +115,14 @@ func TestTokenSelfHealsOnlyWhenGenerated(t *testing.T) {
 	if err := controllerutil.SetControllerReference(cr, emptied, scheme); err != nil {
 		t.Fatal(err)
 	}
-	r := &TadossReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(cr, emptied).Build(), Scheme: scheme}
+	r := &TadossReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithIndex(&tadossv1.Tadoss{}, tadossReferenceIndex, tadossReferenceIndexValue).WithObjects(cr, emptied).Build(), Scheme: scheme}
 	secret, err := r.token(ctx, cr)
 	if err != nil || len(secret.Data["token"]) == 0 {
 		t.Fatalf("emptied generated Secret not refilled: %v", err)
 	}
 	supplied := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "mine", Namespace: "test"}, Data: map[string][]byte{"token": nil}}
 	cr.Spec.Auth.TokenSecret = "mine"
-	r = &TadossReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(cr, supplied).Build(), Scheme: scheme}
+	r = &TadossReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithIndex(&tadossv1.Tadoss{}, tadossReferenceIndex, tadossReferenceIndexValue).WithObjects(cr, supplied).Build(), Scheme: scheme}
 	if secret, err := r.token(ctx, cr); err != nil || len(secret.Data["token"]) != 0 {
 		t.Fatal("a user-supplied Secret must not be modified")
 	}
@@ -133,7 +133,7 @@ func TestObservedGenerationAdvancesOnlyWhenSettled(t *testing.T) {
 	scheme := testScheme(t)
 	cr := instance()
 	cr.Generation = 3
-	r := &TadossReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(cr).WithObjects(cr).Build(), Scheme: scheme}
+	r := &TadossReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithIndex(&tadossv1.Tadoss{}, tadossReferenceIndex, tadossReferenceIndexValue).WithStatusSubresource(cr).WithObjects(cr).Build(), Scheme: scheme}
 	current := func() tadossv1.TadossStatus {
 		live := &tadossv1.Tadoss{}
 		if err := r.Get(ctx, client.ObjectKeyFromObject(cr), live); err != nil {
@@ -197,7 +197,7 @@ func TestRetainDetachesBackupAndPreservesOtherOwners(t *testing.T) {
 		object.SetOwnerReferences(append(object.GetOwnerReferences(), metav1.OwnerReference{APIVersion: "v1", Kind: "ConfigMap", Name: "foreign", UID: "foreign-uid"}))
 	}
 	failBackupPatch := true
-	cli := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cr, cluster, backup).WithInterceptorFuncs(interceptor.Funcs{
+	cli := fake.NewClientBuilder().WithScheme(scheme).WithIndex(&tadossv1.Tadoss{}, tadossReferenceIndex, tadossReferenceIndexValue).WithObjects(cr, cluster, backup).WithInterceptorFuncs(interceptor.Funcs{
 		Patch: func(ctx context.Context, cli client.WithWatch, obj client.Object, patch client.Patch, options ...client.PatchOption) error {
 			if _, ok := obj.(*cnpgv1.ScheduledBackup); ok && failBackupPatch {
 				failBackupPatch = false

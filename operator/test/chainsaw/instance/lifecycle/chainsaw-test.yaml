@@ -28,6 +28,12 @@ spec:
         file: resources/tadoss.yaml
     - assert:
         file: assert/ready.yaml
+    - command:
+        entrypoint: cat
+        args: [../../fixtures/api_check.py]
+        outputs:
+        - name: apiCheck
+          value: ($stdout)
     - apply:
         file: ../../fixtures/api-check.yaml
     - apply:

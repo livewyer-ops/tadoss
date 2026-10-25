@@ -61,16 +61,12 @@ def test_dns_resolution_is_checked_and_connection_is_pinned():
     connect.assert_not_called()
 
 
-@pytest.mark.parametrize(
-    "phase", ["headers", "body", "tls_handshake", "tls_body", "write"]
-)
+@pytest.mark.parametrize("phase", ["headers", "tls_handshake", "write"])
 def test_total_deadline_interrupts_slow_or_blocked_receiver(phase, tmp_path):
     import threading
     import time
     from dataclasses import replace
 
-    if phase == "tls_body":
-        server_context, client_context = tls_contexts(tmp_path)
     stopped = threading.Event()
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
@@ -82,8 +78,6 @@ def test_total_deadline_interrupts_slow_or_blocked_receiver(phase, tmp_path):
         try:
             with listener.accept()[0] as stream:
                 stream.settimeout(2)
-                if phase == "tls_body":
-                    stream = server_context.wrap_socket(stream, server_side=True)
                 with stream:
                     respond(stream)
         except (OSError, TimeoutError):
@@ -97,9 +91,6 @@ def test_total_deadline_interrupts_slow_or_blocked_receiver(phase, tmp_path):
         while b"\r\n\r\n" not in request:
             request += stream.recv(8192)
         response = b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n"
-        if phase in {"body", "tls_body"}:
-            stream.sendall(response)
-            response = b"x" * 100
         for byte in response:
             stream.sendall(bytes([byte]))
             if stopped.wait(0.03):
@@ -112,9 +103,7 @@ def test_total_deadline_interrupts_slow_or_blocked_receiver(phase, tmp_path):
     )
     started = time.monotonic()
     try:
-        context = (
-            client_context if phase == "tls_body" else ssl.create_default_context()
-        )
+        context = ssl.create_default_context()
         with (
             patch("ssl.create_default_context", return_value=context),
             pytest.raises((OSError, http.client.HTTPException)),
@@ -173,3 +162,137 @@ def tls_contexts(tmp_path):
     server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     server_context.load_cert_chain(cert_path, key_path)
     return server_context, ssl.create_default_context(cafile=str(cert_path))
+
+
+@pytest.mark.parametrize("status", [200, 503])
+@pytest.mark.parametrize("secure", [False, True])
+def test_delivery_closes_an_unfinished_large_response_without_reading_it(
+    status, secure, tmp_path
+):
+    from concurrent.futures import ThreadPoolExecutor
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Event, Thread
+
+    release = Event()
+
+    class Receiver(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(status)
+            self.send_header("Content-Length", str(1024 * 1024 * 1024))
+            self.end_headers()
+            self.wfile.flush()
+            release.wait(timeout=5)
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Receiver)
+    server.daemon_threads = True
+    context = ssl.create_default_context()
+    if secure:
+        server_context, context = tls_contexts(tmp_path)
+        server.socket = server_context.wrap_socket(server.socket, server_side=True)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            try:
+                with patch("ssl.create_default_context", return_value=context):
+                    future = executor.submit(
+                        deliver,
+                        f"{'https' if secure else 'http'}://127.0.0.1:{server.server_port}/",
+                        {},
+                        "",
+                        "",
+                        Settings(
+                            webhook_allowed_hosts="127.0.0.1", webhook_timeout_seconds=3
+                        ),
+                    )
+                    assert future.result(timeout=1) == status
+            finally:
+                release.set()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_connection_tries_other_validated_addresses_before_sending():
+    from tadoss.adapters import webhook_delivery
+
+    addresses = [
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, 443))
+        for ip in ("93.184.216.34", "93.184.216.35")
+    ]
+    first, second = Mock(), Mock()
+    first.connect.side_effect = OSError("unreachable")
+    connection = Mock()
+    connection.getresponse.return_value.status = 200
+    with (
+        patch("socket.getaddrinfo", return_value=addresses) as dns,
+        patch("socket.socket", side_effect=[first, second]),
+        patch("http.client.HTTPConnection", return_value=connection) as http,
+        patch("ssl.create_default_context") as tls,
+        patch.object(
+            webhook_delivery.time,
+            "monotonic",
+            side_effect=[0, 0, 0.1, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1],
+        ),
+    ):
+        assert (
+            deliver(
+                "https://receiver.example/events",
+                {},
+                "",
+                "",
+                Settings(webhook_timeout_seconds=2),
+            )
+            == 200
+        )
+    dns.assert_called_once()
+    http.assert_called_once_with("receiver.example", 443, timeout=2)
+    first.connect.assert_called_once_with(addresses[0][4])
+    second.connect.assert_called_once_with(addresses[1][4])
+    assert second.settimeout.call_args.args[0] < first.settimeout.call_args.args[0]
+    tls.return_value.wrap_socket.assert_called_once_with(
+        second, server_hostname="receiver.example", do_handshake_on_connect=False
+    )
+    connection.request.assert_called_once()
+    connection.getresponse.return_value.read.assert_not_called()
+    connection.getresponse.return_value.close.assert_called_once()
+
+
+def test_post_failure_does_not_try_another_address():
+    addresses = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 80))] * 2
+    connection = Mock()
+    connection.request.side_effect = OSError("connection lost after writing")
+    with (
+        patch("socket.getaddrinfo", return_value=addresses),
+        patch("socket.socket") as connect,
+        patch("http.client.HTTPConnection", return_value=connection),
+        pytest.raises(OSError, match="connection lost"),
+    ):
+        deliver("http://receiver.example/events", {}, "", "", Settings())
+    connect.assert_called_once()
+    connection.request.assert_called_once()
+
+
+def test_all_resolved_addresses_are_checked_before_any_connection():
+    addresses = [
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, 80))
+        for ip in ("93.184.216.34", "169.254.169.254")
+    ]
+    with (
+        patch("socket.getaddrinfo", return_value=addresses),
+        patch("socket.socket") as connect,
+        pytest.raises(APIError, match="restricted"),
+    ):
+        deliver(
+            "http://receiver.example/",
+            {},
+            "",
+            "",
+            Settings(webhook_allowed_hosts="receiver.example"),
+        )
+    connect.assert_not_called()

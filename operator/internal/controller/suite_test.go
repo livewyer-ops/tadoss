@@ -26,6 +26,7 @@ import (
 // live is the client of a manager running against an envtest API server; nil when
 // KUBEBUILDER_ASSETS is unset, in which case the reconcile tests skip themselves.
 var live client.Client
+var direct client.Client
 var fullDataLists atomic.Int64
 
 type roundTripperFunc func(*http.Request) (*http.Response, error)
@@ -65,6 +66,10 @@ func TestMain(m *testing.M) {
 		HealthProbeBindAddress: "0",
 		Client:                 client.Options{Cache: &client.CacheOptions{DisableFor: []client.Object{&corev1.Secret{}, &corev1.ConfigMap{}}}},
 	})
+	if err != nil {
+		panic(err)
+	}
+	direct, err = client.New(cfg, client.Options{Scheme: scheme})
 	if err != nil {
 		panic(err)
 	}

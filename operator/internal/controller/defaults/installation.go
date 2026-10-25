@@ -4,11 +4,12 @@ package defaults
 import (
 	"crypto/sha256"
 	"fmt"
-	"k8s.io/apimachinery/pkg/util/validation"
 	"net/url"
 	"os"
 	"slices"
 	"strings"
+
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	tadossv1 "github.com/livewyer-ops/tadoss/operator/api/v1alpha1"
 	"github.com/livewyer-ops/tadoss/operator/internal/releases"

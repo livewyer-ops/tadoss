@@ -5,26 +5,28 @@ import logging
 import signal
 import threading
 import time
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from psycopg.types.json import Jsonb
 
 from tadoss import metrics
 from tadoss.adapters import postgres as store
 from tadoss.adapters.webhook_delivery import deliver
 from tadoss.application import background
+from tadoss.domain.types import Document, Job
 from tadoss.domain.validation import APIError
+from tadoss.settings import Settings
+from tadoss.worker_health import WorkerHealthState, start_worker_http_server
 
 logger = logging.getLogger("tadoss.worker")
 
 
 @contextmanager
-def renew_claim(pool, job, settings):
+def renew_claim(pool: store.Pool, job: Job, settings: Settings) -> Iterator[None]:
     stopped = threading.Event()
 
-    def renew():
+    def renew() -> None:
         while not stopped.wait(settings.worker_lease_seconds / 3):
             try:
                 with store.transaction(pool, write=True) as db:
@@ -49,7 +51,7 @@ def renew_claim(pool, job, settings):
         thread.join(timeout=2)
 
 
-def log_failure(message, exc, job=None):
+def log_failure(message: str, exc: Exception, job: Job | None = None) -> None:
     logger.warning(
         message,
         extra={
@@ -62,8 +64,14 @@ def log_failure(message, exc, job=None):
 
 
 def complete_webhook(
-    pool, job, settings, error=None, *, terminal=False, credentials=None
-):
+    pool: store.Pool,
+    job: Job,
+    settings: Settings,
+    error: Document | None = None,
+    *,
+    terminal: bool = False,
+    credentials: tuple[str, str] | None = None,
+) -> None:
     identifier, _, webhook_id, payload, attempts, token = job
     with store.transaction(pool, write=True, lock=webhook_id) as db:
         row = db.execute(
@@ -114,7 +122,12 @@ def complete_webhook(
     metrics.WORK.labels("webhook", state).inc()
 
 
-def process_webhook(pool, job, settings, sender=deliver):
+def process_webhook(
+    pool: store.Pool,
+    job: Job,
+    settings: Settings,
+    sender: Callable[[str, Document, str, str, Settings], int] = deliver,
+) -> None:
     _, _, webhook_id, payload, _, _ = job
     with store.transaction(pool) as db:
         row = db.execute(
@@ -149,7 +162,11 @@ def process_webhook(pool, job, settings, sender=deliver):
     )
 
 
-def run_once(pool, settings, sender=deliver):
+def run_once(
+    pool: store.Pool,
+    settings: Settings,
+    sender: Callable[[str, Document, str, str, Settings], int] = deliver,
+) -> bool:
     job = background.claim(pool, settings)
     if job is None:
         return False
@@ -172,7 +189,7 @@ def run_once(pool, settings, sender=deliver):
     return True
 
 
-def maintain(pool):
+def maintain(pool: store.Pool) -> None:
     with store.transaction(pool, write=True) as db:
         # Purge bounded batches so retention cannot monopolise the database.
         db.execute(
@@ -185,48 +202,20 @@ def maintain(pool):
                 "now()-min(created)),0) FROM jobs WHERE kind=%s AND status IN "
                 "('created','started')",
                 (kind,),
-            ).fetchone()
+            ).fetchall()[0]
             metrics.QUEUE.labels(kind).set(count)
             metrics.AGE.labels(kind).set(float(age))
 
 
-def main(settings):
+def main(settings: Settings) -> None:
     settings.database_url()
     stopped = threading.Event()
-    state = {"heartbeat": time.monotonic(), "ready": False}
+    health = WorkerHealthState(max(60, settings.worker_lease_seconds * 2))
+    server = start_worker_http_server(settings, health)
 
-    class Health(BaseHTTPRequestHandler):
-        def do_GET(self):
-            if self.path == "/metrics":
-                content, status, content_type = (
-                    generate_latest(),
-                    200,
-                    CONTENT_TYPE_LATEST,
-                )
-            else:
-                healthy = time.monotonic() - state["heartbeat"] < max(
-                    60, settings.worker_lease_seconds * 2
-                )
-                status = (
-                    200
-                    if healthy and (self.path == "/healthz" or state["ready"])
-                    else 503
-                )
-                content, content_type = b'{"status":"worker"}', "application/json"
-            self.send_response(status)
-            self.send_header("Content-Type", content_type)
-            self.end_headers()
-            self.wfile.write(content)
-
-        def log_message(self, *_args):
-            pass
-
-    server = ThreadingHTTPServer((settings.host, settings.worker_health_port), Health)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    for signum in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(signum, lambda *_args: stopped.set())
     try:
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            signal.signal(signum, lambda *_args: stopped.set())
         with store.create_pool(
             settings.database_url(),
             min_size=settings.pool_min_size,
@@ -238,11 +227,12 @@ def main(settings):
             while not stopped.is_set():
                 full_batch = False
                 try:
+                    health.mark_poll_started()
                     with store.transaction(pool) as db:
                         store.check_schema(db)
-                    state["ready"] = True
+                    health.mark_poll_succeeded()
                     for _ in range(settings.worker_max_requests):
-                        state["heartbeat"] = time.monotonic()
+                        health.mark_poll_started()
                         if stopped.is_set() or not run_once(pool, settings):
                             break
                     else:
@@ -254,11 +244,12 @@ def main(settings):
                         )
                 except Exception as exc:
                     full_batch = False
-                    state["ready"] = False
+                    health.mark_poll_failed()
                     log_failure("Worker is waiting for its database and schema", exc)
-                state["heartbeat"] = time.monotonic()
+                else:
+                    health.mark_poll_succeeded()
                 if not full_batch:
                     stopped.wait(settings.worker_poll_interval_seconds)
     finally:
-        server.shutdown()
-        server.server_close()
+        health.mark_stopping()
+        server.close()

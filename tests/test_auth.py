@@ -152,3 +152,56 @@ def test_jwks_rotation_and_unavailable_key_server():
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+@pytest.mark.parametrize(
+    "scope_claims,permitted",
+    [
+        ({"scope": " tads-api/read tads-api/read "}, True),
+        ({"scp": "tads-api/read"}, True),
+        ({"scope": ["tads-api/read", 42, None, ""]}, True),
+        ({"scp": ["tads-api/read"]}, True),
+        ({"scope": "", "scp": "tads-api/read"}, False),
+        ({"scope": None, "scp": "tads-api/admin"}, False),
+        ({"scope": ["tads-api/read tads-api/admin"]}, False),
+        ({"scope": {"tads-api/admin": True}}, False),
+        ({}, False),
+    ],
+)
+def test_signed_jwt_scope_formats_preserve_operation_permissions(
+    scope_claims, permitted
+):
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    auth = Authentication(
+        Settings(
+            oauth2_issuer="https://issuer.test",
+            oauth2_audience="tadoss",
+            oauth2_jwks_uri="https://issuer.test/jwks",
+        )
+    )
+    auth.jwks = Mock(
+        get_signing_key_from_jwt=Mock(
+            return_value=SimpleNamespace(key=key.public_key())
+        )
+    )
+    claims = {
+        "iss": "https://issuer.test",
+        "aud": "tadoss",
+        "sub": "reader",
+        "exp": datetime.now(UTC) + timedelta(minutes=5),
+        **scope_claims,
+    }
+    token = jwt.encode(claims, key, algorithm="RS256")
+    if permitted:
+        identity = auth.authenticate(request("Bearer " + token))
+        assert identity.subject == "reader"
+        assert identity.scopes == frozenset({"tads-api/read"})
+        assert not identity.admin
+    else:
+        with pytest.raises(APIError) as error:
+            auth.authenticate(request("Bearer " + token))
+        assert error.value.status == 403
+    for method in ("POST", "DELETE"):
+        with pytest.raises(APIError) as error:
+            auth.authenticate(request("Bearer " + token, method=method))
+        assert error.value.status == 403

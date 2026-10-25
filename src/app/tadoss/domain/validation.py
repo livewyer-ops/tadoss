@@ -1,24 +1,29 @@
 import json
 import re
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from jsonschema import Draft202012Validator, SchemaError, ValidationError
+from jsonschema.protocols import Validator
 from jsonschema.validators import validator_for
 from mediatimestamp.immutable import TimeRange, Timestamp
 from referencing import Registry
 from referencing.exceptions import Unresolvable
 
+from tadoss.domain.types import Document
+
 SPEC = json.loads((Path(__file__).parent.parent / "contract/openapi.json").read_text())
 
 
-def now():
+def now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 class APIError(Exception):
-    def __init__(self, status, summary):
+    def __init__(self, status: int, summary: str) -> None:
         self.status = status
         self.body = {
             "type": f"urn:tadoss:error:{status}",
@@ -29,13 +34,13 @@ class APIError(Exception):
 
 
 @lru_cache(maxsize=256)
-def contract_validator(serialised):
+def contract_validator(serialised: str) -> Draft202012Validator:
     """A validator for a contract fragment, keyed by its canonical JSON."""
     schema = json.loads(serialised)
     return Draft202012Validator({"components": SPEC["components"], **schema})
 
 
-def validate(value, schema):
+def validate(value: Any, schema: Document) -> None:
     validator = contract_validator(json.dumps(schema, sort_keys=True))
     try:
         validator.validate(value)
@@ -46,12 +51,12 @@ def validate(value, schema):
         raise APIError(400, "JSON structure is too deeply nested") from exc
 
 
-def json_equal(left, right):
+def json_equal(left: Any, right: Any) -> bool:
     """JSON equality distinguishes booleans from numbers, unlike Python equality."""
     return Draft202012Validator({"const": left}).is_valid(right)
 
 
-def storage_safe(value):
+def storage_safe(value: Any) -> None:
     """Reject strings PostgreSQL cannot represent before entering a transaction."""
     if isinstance(value, str):
         if "\x00" in value or any(0xD800 <= ord(char) <= 0xDFFF for char in value):
@@ -67,16 +72,16 @@ def storage_safe(value):
             storage_safe(item)
 
 
-def contract_schema(name):
+def contract_schema(name: str) -> dict[str, str]:
     return {"$ref": f"#/components/schemas/{name}"}
 
 
-def payload_validator(schema):
+def payload_validator(schema: Document) -> Validator:
     return compiled_payload_validator(json.dumps(schema, sort_keys=True))
 
 
 @lru_cache(maxsize=128)
-def compiled_payload_validator(serialised):
+def compiled_payload_validator(serialised: str) -> Validator:
     """Validator for a stored payload schema; rejected schemas are not cached."""
     schema = json.loads(serialised)
     # No remote schema retrieval: payload validation must not make network requests.
@@ -96,7 +101,7 @@ def compiled_payload_validator(serialised):
         raise APIError(400, "Payload schema is too deeply nested") from exc
 
 
-def validate_payload(validator, payload):
+def validate_payload(validator: Validator, payload: Any) -> None:
     try:
         validator.validate(payload)
     except (ValidationError, Unresolvable, RecursionError) as exc:
@@ -106,7 +111,7 @@ def validate_payload(validator, payload):
         ) from exc
 
 
-def time_range(value, require_non_empty=False):
+def time_range(value: Any, require_non_empty: bool = False) -> TimeRange:
     pattern = SPEC["components"]["schemas"]["timerange"]["pattern"]
     if not isinstance(value, str) or not re.fullmatch(pattern, value):
         raise APIError(
@@ -134,12 +139,12 @@ def time_range(value, require_non_empty=False):
     return result
 
 
-def check_grid(timerange, track):
+def check_grid(timerange: TimeRange, track: Document) -> None:
     bounds = [bound for bound in (timerange.start, timerange.end) if bound is not None]
     check_grid_timestamps(bounds, track)
 
 
-def check_grid_timestamps(timestamps, track):
+def check_grid_timestamps(timestamps: Iterable[Timestamp], track: Document) -> None:
     if rate := track.get("edit_rate"):
         for bound in timestamps:
             if bound.normalise(rate["numerator"], rate.get("denominator", 1)) != bound:
@@ -148,21 +153,13 @@ def check_grid_timestamps(timestamps, track):
                 )
 
 
-def event_key(event, reverse=False):
-    timerange = time_range(event["timerange"])
-    start = (
-        timerange.start.to_nanosec() if timerange.start is not None else float("-inf"),
-        not timerange.includes_start(),
-    )
-    end = (
-        timerange.end.to_nanosec() if timerange.end is not None else float("inf"),
-        timerange.includes_end(),
-    )
-    return (*end, *start, event["id"]) if reverse else (*start, *end, event["id"])
-
-
-def coverage(events):
+def coverage(events: Iterable[Document]) -> str:
     result = TimeRange.never()
     for event in events:
         result = result.extend_to_encompass_timerange(time_range(event["timerange"]))
     return str(result)
+
+
+def writable(track: Document) -> None:
+    if track["read_only"]:
+        raise APIError(403, "Track is read-only")

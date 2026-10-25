@@ -66,6 +66,19 @@ func TestReconcileManagedInstance(t *testing.T) {
 		t.Fatalf("unexpected cluster %+v", cluster.Spec)
 	}
 	setStatus(t, cluster, func() { cluster.Status.ReadyInstances = 1 })
+	databasePod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo-db-1", Namespace: namespace, Labels: map[string]string{"cnpg.io/cluster": cluster.Name}},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: postgresContainerName, Image: cluster.Spec.ImageName}}},
+	}
+	if err := controllerutil.SetControllerReference(cluster, databasePod, live.Scheme()); err != nil {
+		t.Fatal(err)
+	}
+	if err := live.Create(ctx, databasePod); err != nil {
+		t.Fatal(err)
+	}
+	setStatus(t, databasePod, func() {
+		databasePod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: postgresContainerName, Image: cluster.Spec.ImageName, ImageID: "test-image", Ready: true}}
+	})
 	app := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "demo-db-app", Namespace: namespace}, StringData: map[string]string{"uri": "postgresql://u:p@demo-db-rw:5432/tadoss"}}
 	if err := live.Create(ctx, app); err != nil {
 		t.Fatal(err)
@@ -101,7 +114,7 @@ func TestReconcileManagedInstance(t *testing.T) {
 		job = jobs.Items[0]
 		return true
 	})
-	if env := job.Spec.Template.Spec.Containers[0].Env; len(env) != 3 || env[0].ValueFrom.SecretKeyRef.Name != "demo-db-app" || env[1].Value != "/etc/tadoss/database-ca/ca.pem" || env[2].Value != "0003_background" {
+	if env := job.Spec.Template.Spec.Containers[0].Env; len(env) != 3 || env[0].ValueFrom.SecretKeyRef.Name != "demo-db-app" || env[1].Value != "/etc/tadoss/database-ca/ca.pem" || env[2].Value != "0001_baseline" {
 		t.Fatalf("schema job must receive database URI, CA and selected schema target: %+v", env)
 	}
 	setStatus(t, &job, func() {

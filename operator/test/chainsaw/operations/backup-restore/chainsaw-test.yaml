@@ -58,6 +58,12 @@ spec:
             name: journey
           status:
             phase: Ready
+    - command:
+        entrypoint: cat
+        args: [../../fixtures/api_check.py]
+        outputs:
+        - name: apiCheck
+          value: ($stdout)
     - apply:
         file: ../../fixtures/api-check.yaml
     - apply:
@@ -141,27 +147,31 @@ spec:
           metadata:
             name: journey-backup
             (ownerReferences == null || length(ownerReferences) == `0`): true
-    - script:
-        env:
-        - name: NAMESPACE
-          value: ($namespace)
-        content: |
-          python3 - <<'PYTHON'
-          import json, os, subprocess, time
-          command = ['kubectl', '-n', os.environ['NAMESPACE']]
-          def backups():
-              return json.loads(subprocess.check_output(command + ['get', 'backups', '-l', 'cnpg.io/scheduled-backup=journey-backup', '-o', 'json']))['items']
-          previous = {item['metadata']['uid'] for item in backups()}
-          subprocess.run(command + ['patch', 'scheduledbackup', 'journey-backup', '--type=merge', '-p', json.dumps({'spec': {'schedule': '*/10 * * * * *'}})], check=True)
-          deadline = time.monotonic() + 150
-          while time.monotonic() < deadline:
-              if any(item['metadata']['uid'] not in previous and item.get('status', {}).get('phase') == 'completed' for item in backups()):
-                  print('A new scheduled backup completed after Retain deletion')
-                  break
-              time.sleep(2)
-          else:
-              raise SystemExit('Retained database did not complete a new scheduled backup')
-          PYTHON
+    - patch:
+        bindings:
+        - name: previousBackups
+          value: (x_k8s_list($client, 'postgresql.cnpg.io/v1', 'Backup', $namespace).items[].metadata.uid)
+        resource:
+          apiVersion: postgresql.cnpg.io/v1
+          kind: ScheduledBackup
+          metadata:
+            name: journey-backup
+          spec:
+            schedule: '*/10 * * * * *'
+        outputs:
+        - name: previousBackups
+          value: ($previousBackups)
+    - assert:
+        timeout: 150s
+        resource:
+          apiVersion: postgresql.cnpg.io/v1
+          kind: Backup
+          metadata:
+            labels:
+              cnpg.io/scheduled-backup: journey-backup
+            (contains($previousBackups, uid)): false
+          status:
+            phase: completed
   - name: stop-databases-before-namespace-cleanup
     try:
     - delete:

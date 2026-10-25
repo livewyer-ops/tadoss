@@ -9922,6 +9922,7 @@ rules:
   resources:
   - configmaps
   - namespaces
+  - pods
   verbs:
   - get
   - list
@@ -9930,12 +9931,22 @@ rules:
   - ""
   resources:
   - secrets
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - ""
+  resources:
   - services
   verbs:
   - create
   - get
   - list
   - patch
+  - update
   - watch
 - apiGroups:
   - ""
@@ -9955,6 +9966,7 @@ rules:
   - get
   - list
   - patch
+  - update
   - watch
 - apiGroups:
   - authentication.k8s.io
@@ -9990,6 +10002,7 @@ rules:
   - get
   - list
   - patch
+  - update
   - watch
 - apiGroups:
   - policy
@@ -10001,6 +10014,7 @@ rules:
   - get
   - list
   - patch
+  - update
   - watch
 - apiGroups:
   - postgresql.cnpg.io
@@ -10013,6 +10027,7 @@ rules:
   - get
   - list
   - patch
+  - update
   - watch
 - apiGroups:
   - tadoss.livewyer.io

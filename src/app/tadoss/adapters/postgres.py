@@ -1,28 +1,23 @@
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from decimal import Decimal
+from typing import Any
 from urllib.parse import unquote
-from uuid import uuid4
 
 from mediatimestamp.immutable import TimeRange, Timestamp
-from psycopg import sql
+from psycopg import Connection, Cursor, sql
 from psycopg.types.json import Jsonb
 from psycopg.types.range import Range
 from psycopg_pool import ConnectionPool
 
 from tadoss.db import migrations
+from tadoss.domain.types import Document, EventCursor, Options
 from tadoss.domain.validation import (
     APIError,
-    check_grid,
-    check_grid_timestamps,
-    contract_schema,
-    json_equal,
-    now,
-    payload_validator,
-    storage_safe,
-    time_range,
-    validate,
-    validate_payload,
 )
+
+type Database = Cursor[tuple[Any, ...]]
+type Pool = ConnectionPool[Connection[tuple[Any, ...]]]
 
 DEFAULT_DATABASE = "postgresql://tadoss:tadoss@127.0.0.1:15432/tadoss"
 # Tables addressed by name from the API; anything else is a programming error.
@@ -35,14 +30,14 @@ REVERSE = ("sort_end", "sort_end_incl", "sort_start", "sort_start_excl", "id")
 
 
 def create_pool(
-    database,
-    min_size=1,
-    max_size=10,
-    timeout=30.0,
-    configure=None,
-    statement_timeout="30s",
-):
-    def configure_connection(connection):
+    database: str,
+    min_size: int = 1,
+    max_size: int = 10,
+    timeout: float = 30.0,
+    configure: Callable[[Connection[tuple[Any, ...]]], None] | None = None,
+    statement_timeout: str = "30s",
+) -> Pool:
+    def configure_connection(connection: Connection[tuple[Any, ...]]) -> None:
         connection.execute(
             "SELECT set_config('statement_timeout', %s, false)", (statement_timeout,)
         )
@@ -62,24 +57,29 @@ def create_pool(
     )
 
 
-def initialize(pool):
+def initialize(pool: Pool) -> None:
     with pool.connection() as connection, connection.cursor() as db:
         db.execute("SELECT pg_advisory_xact_lock(%s)", (LOCK_SPACE,))
         migrations.apply(db)
         check_schema(db)
 
 
-def check_schema(db):
+def check_schema(db: Database) -> None:
     names = migrations.applied(db)
     expected = [name for name, _ in migrations.MIGRATIONS]
+    if names is not None and any(name not in expected for name in names):
+        raise RuntimeError("Database migration history is incompatible with this build")
     if names is None or any(name not in names for name in expected):
         raise RuntimeError("Database migration pending")
-    if any(name not in expected for name in names):
-        raise RuntimeError("Database is newer than this build")
 
 
 @contextmanager
-def transaction(pool, write=False, lock=None, timeout=None):
+def transaction(
+    pool: Pool,
+    write: bool = False,
+    lock: str | None = None,
+    timeout: float | None = None,
+) -> Iterator[Database]:
     with pool.connection(timeout=timeout) as connection, connection.cursor() as db:
         if write:
             db.execute("SET LOCAL lock_timeout = '10s'")
@@ -97,7 +97,9 @@ def transaction(pool, write=False, lock=None, timeout=None):
         yield db
 
 
-def range_columns(timerange):
+def range_columns(
+    timerange: TimeRange,
+) -> tuple[Range[Decimal], Decimal, bool, Decimal, bool]:
     """Range and sort keys of a TimeRange, in the order of the events columns."""
     if timerange.is_empty():
         return Range(empty=True), Decimal(0), True, Decimal(0), False
@@ -115,7 +117,9 @@ def range_columns(timerange):
     )
 
 
-def sort_keys_timerange(start, start_excl, end, end_incl):
+def sort_keys_timerange(
+    start: Decimal, start_excl: bool, end: Decimal, end_incl: bool
+) -> TimeRange:
     lower = (
         None if start == Decimal("-Infinity") else Timestamp.from_nanosec(int(start))
     )
@@ -128,13 +132,13 @@ def sort_keys_timerange(start, start_excl, end, end_incl):
     return TimeRange(lower, upper, inclusivity)
 
 
-def table_name(table):
+def table_name(table: str) -> sql.Identifier:
     if table not in TABLES:
         raise ValueError(f"Unknown table {table!r}")
     return sql.Identifier(table)
 
 
-def find(db, table, identifier):
+def find(db: Database, table: str, identifier: str) -> Document | None:
     """The document with this id, or None."""
     row = db.execute(
         sql.SQL("SELECT document FROM {} WHERE id = %s").format(table_name(table)),
@@ -143,7 +147,7 @@ def find(db, table, identifier):
     return None if row is None else row[0]
 
 
-def get(db, table, identifier):
+def get(db: Database, table: str, identifier: str) -> Document:
     """The document with this id; 404 when absent."""
     document = find(db, table, identifier)
     if document is None:
@@ -151,7 +155,9 @@ def get(db, table, identifier):
     return document
 
 
-def listing(db, table, options, limit, after=None):
+def listing(
+    db: Database, table: str, options: Options, limit: int, after: str | None = None
+) -> list[Document]:
     query = sql.SQL("SELECT document FROM {} WHERE TRUE").format(table_name(table))
     params = []
     overlapping = options.get("timerange")
@@ -169,16 +175,28 @@ def listing(db, table, options, limit, after=None):
             query += sql.SQL(" AND COALESCE((document->'tags') ? %s, false) = %s")
             params.extend([key[11:], value])
         elif key.startswith("tag."):
-            query += sql.SQL(" AND ((document->'tags'->%s) ?| %s)")
-            params.extend([key[4:], value.split(",")])
-        elif key == "timeline_reference.entity_id":
-            query += sql.SQL(
-                " AND document->'timeline_reference'->>'entity_id' = ANY(%s)"
+            query += sql.SQL(" AND document @> ANY(%s)")
+            params.append(
+                [
+                    Jsonb({"tags": {key[4:]: member}})
+                    for item in value.split(",")
+                    for member in (item, [item])
+                ]
             )
-            params.append([unquote(uri) for uri in value.split(",")])
-        elif key in {"label", "external_id", "schema_id", "editable_events"}:
-            query += sql.SQL(" AND document->%s = %s")
-            params.extend([key, Jsonb(value)])
+        elif key == "timeline_reference.entity_id":
+            query += sql.SQL(" AND document @> ANY(%s)")
+            params.append(
+                [
+                    Jsonb({"timeline_reference": {"entity_id": unquote(uri)}})
+                    for uri in value.split(",")
+                ]
+            )
+        elif key == "schema_id":
+            query += sql.SQL(" AND schema_id = %s")
+            params.append(value)
+        elif key in {"label", "external_id", "editable_events"}:
+            query += sql.SQL(" AND document @> %s")
+            params.append(Jsonb({key: value}))
     if after is not None:
         query += sql.SQL(" AND id > %s")
         params.append(after)
@@ -188,9 +206,11 @@ def listing(db, table, options, limit, after=None):
     ]
 
 
-def event_filters(track_id, options, deleting=False):
+def event_filters(
+    track_id: str, options: Options, deleting: bool = False
+) -> tuple[sql.Composed, list[Any]]:
     clauses = [sql.SQL("track_id = %s")]
-    params = [track_id]
+    params: list[Any] = [track_id]
     if "ids" in options:
         clauses.append(sql.SQL("id = ANY(%s)"))
         params.append(options["ids"])
@@ -200,7 +220,14 @@ def event_filters(track_id, options, deleting=False):
     return sql.SQL(" AND ").join(clauses), params
 
 
-def events(db, track_id, options, limit, cursor=None, reverse=False):
+def events(
+    db: Database,
+    track_id: str,
+    options: Options,
+    limit: int,
+    cursor: EventCursor | None = None,
+    reverse: bool = False,
+) -> list[tuple[Document, EventCursor]]:
     """Up to ``limit`` events in TADS order after ``cursor`` as (document, key)."""
     where, params = event_filters(track_id, options)
     keys = REVERSE if reverse else FORWARD
@@ -223,14 +250,14 @@ def events(db, track_id, options, limit, cursor=None, reverse=False):
     return [(row[0], row[1:]) for row in db.execute(query, [*params, limit])]
 
 
-def event(db, identifier):
+def event(db: Database, identifier: str) -> tuple[str, Document] | None:
     row = db.execute(
         "SELECT track_id, document FROM events WHERE id = %s", (identifier,)
     ).fetchone()
     return None if row is None else (row[0], row[1])
 
 
-def delete_events(db, track_id, options):
+def delete_events(db: Database, track_id: str, options: Options) -> int:
     timerange = options.get("timerange")
     if timerange is not None and timerange.is_empty():
         return 0
@@ -239,7 +266,9 @@ def delete_events(db, track_id, options):
     return db.rowcount
 
 
-def upsert_event(db, track_id, record, timerange):
+def upsert_event(
+    db: Database, track_id: str, record: Document, timerange: TimeRange
+) -> bool:
     """Insert or replace an event; False when the id belongs to another track."""
     db.execute(
         "INSERT INTO events (id, track_id, document, timerange,"
@@ -255,7 +284,9 @@ def upsert_event(db, track_id, record, timerange):
     return db.rowcount == 1
 
 
-def overlapping_exists(db, track_id, timerange, exclude_id):
+def overlapping_exists(
+    db: Database, track_id: str, timerange: TimeRange, exclude_id: str
+) -> bool:
     return (
         db.execute(
             "SELECT 1 FROM events WHERE track_id = %s AND id <> %s AND timerange && %s"
@@ -266,7 +297,7 @@ def overlapping_exists(db, track_id, timerange, exclude_id):
     )
 
 
-def track_has_events(db, track_id):
+def track_has_events(db: Database, track_id: str) -> bool:
     return (
         db.execute(
             "SELECT 1 FROM events WHERE track_id = %s LIMIT 1", (track_id,)
@@ -275,7 +306,7 @@ def track_has_events(db, track_id):
     )
 
 
-def track_has_overlaps(db, track_id):
+def track_has_overlaps(db: Database, track_id: str) -> bool:
     return (
         db.execute(
             "SELECT 1 FROM events a JOIN events b ON b.track_id = a.track_id"
@@ -287,7 +318,7 @@ def track_has_overlaps(db, track_id):
     )
 
 
-def track_bounds(db, track_id):
+def track_bounds(db: Database, track_id: str) -> list[Timestamp]:
     """Distinct finite event boundaries of a track."""
     rows = db.execute(
         "SELECT DISTINCT bound FROM (SELECT lower(timerange) AS bound FROM events"
@@ -298,7 +329,9 @@ def track_bounds(db, track_id):
     return [Timestamp.from_nanosec(int(value)) for (value,) in rows]
 
 
-def track_coverage(db, track_id, overlapping=None):
+def track_coverage(
+    db: Database, track_id: str, overlapping: TimeRange | None = None
+) -> str:
     """Timerange string spanning a track's events, optionally only those overlapping."""
     options = {} if overlapping is None else {"timerange": overlapping}
     where, params = event_filters(track_id, options)
@@ -319,10 +352,12 @@ def track_coverage(db, track_id, overlapping=None):
         ).format(where),
         params,
     ).fetchone()
+    if last is None:
+        raise RuntimeError("Track changed during coverage query")
     return str(sort_keys_timerange(first[0], first[1], last[0], last[1]))
 
 
-def save(db, table, document):
+def save(db: Database, table: str, document: Document) -> None:
     columns = ["id", "document"]
     values = [document["id"], Jsonb(document)]
     if table == "tracks":
@@ -345,13 +380,13 @@ def save(db, table, document):
     )
 
 
-def delete(db, table, identifier):
+def delete(db: Database, table: str, identifier: str) -> None:
     db.execute(
         sql.SQL("DELETE FROM {} WHERE id = %s").format(table_name(table)), (identifier,)
     )
 
 
-def schema_in_use(db, schema_id):
+def schema_in_use(db: Database, schema_id: str) -> bool:
     return (
         db.execute(
             "SELECT 1 FROM tracks WHERE schema_id = %s LIMIT 1", (schema_id,)
@@ -360,135 +395,10 @@ def schema_in_use(db, schema_id):
     )
 
 
-def writable(track):
-    if track["read_only"]:
-        raise APIError(403, "Track is read-only")
-
-
-def save_schema(db, document, old=None, subject="tadoss"):
-    validate(document, contract_schema("schema"))
-    storage_safe(document)
-    payload_validator(document["schema"])
-    if old and not json_equal(old["schema"], document["schema"]):
-        raise APIError(403, "A payload schema's schema is immutable")
-    timestamp = now()
-    document["tags"] = document.get("tags", {})
-    document["created"] = old["created"] if old else timestamp
-    document["updated"] = timestamp
-    document["created_by"] = old["created_by"] if old else subject
-    document["updated_by"] = subject
-    save(db, "schemas", document)
-
-
-def save_track(db, document, old=None, unlocking=False, subject="tadoss"):
-    validate(document, contract_schema("track"))
-    storage_safe(document)
-    if old and not unlocking:
-        writable(old)
-    get(db, "schemas", document["schema_id"])
-    for key, default in (
-        ("tags", {}),
-        ("read_only", False),
-        ("allow_overlaps", True),
-        ("editable_events", True),
-    ):
-        document.setdefault(key, default)
-    document.pop("timerange", None)
-    if old:
-        if old["schema_id"] != document["schema_id"]:
-            raise APIError(400, "A track's schema_id is immutable")
-        populated = track_has_events(db, old["id"])
-        if populated and old["timeline_reference"] != document["timeline_reference"]:
-            raise APIError(
-                400, "Cannot change the timeline reference of a populated track"
-            )
-        if populated and document.get("edit_rate"):
-            check_grid_timestamps(track_bounds(db, old["id"]), document)
-        if not document["allow_overlaps"] and track_has_overlaps(db, old["id"]):
-            raise APIError(400, "Track already contains overlapping events")
-    timestamp = now()
-    document["created"] = old["created"] if old else timestamp
-    document["created_by"] = old["created_by"] if old else subject
-    document["updated_by"] = subject
-    document["events_updated"] = old["events_updated"] if old else timestamp
-    ignored = {"metadata_version", "metadata_updated", "events_updated"}
-    if old is None or not json_equal(
-        {k: v for k, v in document.items() if k not in ignored},
-        {k: v for k, v in old.items() if k not in ignored},
-    ):
-        document["metadata_updated"] = timestamp
-        if not document.get("metadata_version") or (
-            old and document["metadata_version"] == old["metadata_version"]
-        ):
-            document["metadata_version"] = str(uuid4())
-    else:
-        document["metadata_updated"] = old["metadata_updated"]
-        if not document.get("metadata_version"):
-            document["metadata_version"] = old["metadata_version"]
-    save(db, "tracks", document)
-
-
-def write_events(db, track, body):
-    writable(track)
-    batch = body if isinstance(body, list) else [body]
-    if (
-        not batch
-        or len(batch) > 1000
-        or any(not isinstance(record, dict) for record in batch)
-    ):
-        raise APIError(
-            400, "Supply an event object or an array of 1 to 1000 event objects"
+def event_documents(db: Database, identifiers: list[str]) -> list[dict[str, Any]]:
+    return [
+        row[0]
+        for row in db.execute(
+            "SELECT document FROM events WHERE id=ANY(%s)", (identifiers,)
         )
-    validator = payload_validator(get(db, "schemas", track["schema_id"])["schema"])
-    prepared = []
-    for incoming in batch:
-        try:
-            validate(incoming, contract_schema("track-event-post"))
-            storage_safe(incoming)
-            prepared.append({**incoming, "id": incoming.get("id", str(uuid4()))})
-        except APIError as exc:
-            prepared.append(exc)
-    owners = dict(
-        db.execute(
-            "SELECT id,track_id FROM events WHERE id=ANY(%s)",
-            ([record["id"] for record in prepared if isinstance(record, dict)],),
-        ).fetchall()
-    )
-    responses = []
-    changed = False
-    for record in prepared:
-        result = {}
-        try:
-            if isinstance(record, APIError):
-                raise record
-            result["id"] = record["id"]
-            existing = owners.get(record["id"])
-            if existing and existing != track["id"]:
-                raise APIError(400, "Event ID already belongs to another track")
-            if existing and not track["editable_events"]:
-                raise APIError(403, "Track does not permit editing existing events")
-            timerange = time_range(record["timerange"], require_non_empty=True)
-            check_grid(timerange, track)
-            validate_payload(validator, record["payload"])
-            if not track["allow_overlaps"] and overlapping_exists(
-                db, track["id"], timerange, record["id"]
-            ):
-                raise APIError(400, "Event overlaps an existing event")
-            record["timerange"] = str(timerange)
-            # A savepoint keeps one rejected event from discarding the others.
-            with db.connection.transaction():
-                if not upsert_event(db, track["id"], record, timerange):
-                    raise APIError(400, "Event ID already belongs to another track")
-            result["http_status_code"] = 200 if existing else 201
-            owners[record["id"]] = track["id"]
-            changed = True
-        except APIError as exc:
-            result.update(http_status_code=exc.status, error=exc.body)
-        responses.append(result)
-    if changed:
-        track["events_updated"] = now()
-        save(db, "tracks", track)
-    return {
-        "all_successful": all(r["http_status_code"] < 300 for r in responses),
-        "responses": responses,
-    }
+    ]

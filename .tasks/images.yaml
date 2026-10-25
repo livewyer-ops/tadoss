@@ -3,5 +3,5 @@ tasks:
   build:
     desc: Build runtime and operator images from current sources
     cmds:
-      - docker build -t livewyer/tadoss-api:{{.IMAGE_TAG}} .
-      - docker build -t livewyer/tadoss-operator:{{.IMAGE_TAG}} operator
+      - docker build -t {{printf "livewyer/tadoss-api:%s" .IMAGE_TAG | shellQuote}} .
+      - docker build -t {{printf "livewyer/tadoss-operator:%s" .IMAGE_TAG | shellQuote}} operator

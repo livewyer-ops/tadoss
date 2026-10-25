@@ -38,6 +38,14 @@ jobs:
           task operator:generate
           git add -A -- operator/api operator/config deploy/operator
           git diff --cached --exit-code --stat
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: test-reports
+          path: |
+            reports/python*.xml
+            reports/go-coverage.*
+          if-no-files-found: warn
   kind:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45

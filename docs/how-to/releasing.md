@@ -12,6 +12,6 @@ Local artifact generation requires an operator built with the same runtime diges
 task release:artifacts RUNTIME_IMAGE=registry.example/api@sha256:<digest> OPERATOR_IMAGE=registry.example/operator@sha256:<digest>
 ```
 
-No old-version upgrade or migration compatibility is promised before the first stable release. Database migrations support the current ordered schema and reject a database newer than the running image.
+Migration histories may be consolidated before the first public release. After publication, keep released migrations unchanged and append new migrations. Database migrations support the current ordered schema and reject incompatible migration histories. See the [changelog](../../CHANGELOG.md) for database reset and migration prerequisites.
 
 Qualification must run every profile against the same final runtime and operator builds, including a scheduled backup completing after Retain deletion. Native ARM64 remains a required CI check. Record local architecture, image identities and any unexecuted checks in the qualification report; a local AMD64 pass does not stand in for ARM64. Install released manifests with the [defaults overlay or explicit instance fields](../../deploy/README.md#install-a-digest-pinned-release).

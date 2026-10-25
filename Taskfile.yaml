@@ -7,10 +7,9 @@ vars:
   INSTANCE: '{{.INSTANCE | default ""}}'
   CLUSTER: '{{.CLUSTER | default "tadoss"}}'
   KUBECONFIG: '{{.KUBECONFIG | default (printf "%s/.local/%s.kubeconfig" .ROOT_DIR .CLUSTER)}}'
-  IMAGE_TAG:
-    sh: python3 scripts/image_tag.py
-  ENV_COMMAND: 'uv run --project src --frozen python scripts/environment.py'
-  ENV_ARGS: '--directory {{.ENV_DIR}} --kubeconfig {{.KUBECONFIG}} {{if .INSTANCE}}--instance {{.INSTANCE}}{{end}}'
+  BUILD_ID:
+    sh: date -u +%Y%m%d%H%M%S%N
+  IMAGE_TAG: '{{.IMAGE_TAG | default (printf "dev-%s" .BUILD_ID)}}'
 env:
   AQUA_CONFIG: '{{.ROOT_DIR}}/aqua.yml'
   HELM_PLUGINS: '{{.ROOT_DIR}}/.local/helm/plugins'
@@ -18,7 +17,6 @@ env:
 includes:
   dev: .tasks/dev.yaml
   env: .tasks/env.yaml
-  instance: .tasks/instance.yaml
   operator: .tasks/operator.yaml
   test: .tasks/test.yaml
   lint: .tasks/lint.yaml

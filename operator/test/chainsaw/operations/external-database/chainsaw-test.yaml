@@ -49,20 +49,15 @@ spec:
             name: external-db
           status:
             readyInstances: 1
-    - &id001
-      script:
-        shell: bash
-        shellArgs:
-        - -c
-        env:
-        - name: INSTANCE_NAMESPACE
-          value: ($namespace)
-        content: |
-          set -euo pipefail
-          certificate=$(mktemp)
-          trap 'rm "$certificate"' EXIT
-          kubectl get secret external-db-ca -n "$INSTANCE_NAMESPACE" -o 'jsonpath={.data.ca\.crt}' | base64 --decode > "$certificate"
-          kubectl create configmap external-db-ca -n "$INSTANCE_NAMESPACE" --from-file=ca.crt="$certificate" --dry-run=client -o yaml | kubectl apply -f -
+    - &databaseCA
+      apply:
+        resource:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: external-db-ca
+          data:
+            ca.crt: (base64_decode(x_k8s_get($client, 'v1', 'Secret', $namespace, 'external-db-ca').data."ca.crt"))
     - apply:
         resource:
           apiVersion: tadoss.livewyer.io/v1alpha1
@@ -134,7 +129,7 @@ spec:
           status:
             phase: Error
             (conditions[?type == 'Ready'] | [0].reason): SchemaFailed
-    - *id001
+    - *databaseCA
     - assert:
         resource:
           apiVersion: tadoss.livewyer.io/v1alpha1
@@ -165,6 +160,12 @@ spec:
           status:
             updatedReplicas: 2
             availableReplicas: 2
+    - command:
+        entrypoint: cat
+        args: [../../fixtures/api_check.py]
+        outputs:
+        - name: apiCheck
+          value: ($stdout)
     - apply:
         file: ../../fixtures/api-check.yaml
     - apply:
