@@ -1,3 +1,4 @@
+import base64
 import json
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
@@ -283,6 +284,23 @@ def test_empty_timeranges(api) -> None:
     assert api.send("GET", api.events, params={"timerange": "()"}).json() == []
     api.send("DELETE", api.events, params={"timerange": "()"}, status=204)
     assert len(api.send("GET", api.events).json()) == 1
+
+
+def test_decoded_event_cursor_identifiers_are_validated(api, subtests) -> None:
+    for reverse in (False, True):
+        for identifier in ["\x00", "\ud800", "not-a-uuid", TRACK_ID]:
+            with subtests.test(reverse=reverse, identifier=repr(identifier)):
+                cursor = base64.urlsafe_b64encode(
+                    json.dumps(
+                        {"v": 2, "r": reverse, "k": ["0", False, "1", True, identifier]}
+                    ).encode()
+                ).decode()
+                api.send(
+                    "GET",
+                    api.events,
+                    params={"page": cursor, "reverse_order": str(reverse).lower()},
+                    status=200 if identifier == TRACK_ID else 400,
+                )
 
 
 def test_same_id_on_two_tracks_concurrently(api) -> None:

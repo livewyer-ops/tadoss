@@ -57,6 +57,7 @@ func TestReconcileManagedInstance(t *testing.T) {
 	ctx := context.Background()
 	namespace := newNamespace(t)
 	cr := newInstance(namespace, "demo", false)
+	cr.Spec.Worker.EnvFrom = []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "worker-settings"}, Optional: ptr.To(true)}}}
 	if err := live.Create(ctx, cr); err != nil {
 		t.Fatal(err)
 	}
@@ -159,6 +160,32 @@ func TestReconcileManagedInstance(t *testing.T) {
 	}
 	if err := live.Get(ctx, client.ObjectKeyFromObject(cr), cr); err != nil {
 		t.Fatal(err)
+	}
+	settings := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "worker-settings", Namespace: namespace}, Data: map[string][]byte{"TADOSS_WEBHOOK_ALLOWED_HOSTS": []byte("initial.example")}}
+	for _, action := range []string{"create", "update", "delete"} {
+		oldFingerprint := deployment.Spec.Template.Annotations["checksum/credentials"]
+		var err error
+		switch action {
+		case "create":
+			err = live.Create(ctx, settings)
+		case "update":
+			settings.Data["TADOSS_WEBHOOK_ALLOWED_HOSTS"] = []byte("rotated.example")
+			err = live.Update(ctx, settings)
+		case "delete":
+			err = live.Delete(ctx, settings)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		eventually(t, "optional Secret "+action+" rolls workloads", func() bool {
+			if live.Get(ctx, client.ObjectKeyFromObject(deployment), deployment) != nil || live.Get(ctx, client.ObjectKeyFromObject(worker), worker) != nil {
+				return false
+			}
+			return deployment.Spec.Template.Annotations["checksum/credentials"] != oldFingerprint && worker.Spec.Template.Annotations["checksum/credentials"] == deployment.Spec.Template.Annotations["checksum/credentials"]
+		})
+		if err := live.Get(ctx, client.ObjectKeyFromObject(cr), cr); err != nil || cr.Status.SchemaJob != job.Name {
+			t.Fatalf("optional worker Secret must not rerun schema migration: %v", err)
+		}
 	}
 	oldJob, oldFingerprint := job.Name, deployment.Spec.Template.Annotations["checksum/credentials"]
 	ca.Data["ca.crt"] = []byte("rotated CA")

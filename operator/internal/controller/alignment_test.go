@@ -106,10 +106,10 @@ func TestReferenceIndexPreservesDependencies(t *testing.T) {
 	cr.Spec.Backends.DB.External.ExistingSecret = "external-db"
 	cr.Spec.Backends.DB.External.CAConfigMap = &corev1.ConfigMapKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "ca"}, Key: "cert"}
 	cr.Spec.Worker.EnvFrom = []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "extra"}}}}
-	cr.Spec.API.Volumes = []corev1.Volume{{Name: "optional", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "ignored", Optional: ptr.To(true)}}}}
+	cr.Spec.API.Volumes = []corev1.Volume{{Name: "optional", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "optional", Optional: ptr.To(true)}}}}
 	before := cr.DeepCopy()
 	tadossReferenceIndexValue(cr)
-	for _, name := range []string{"token", "basic", "external-db", "ca", "extra", cr.Name + suffixDBCA, cr.Name + suffixDBApp, cr.Name + suffixToken} {
+	for _, name := range []string{"token", "basic", "external-db", "ca", "extra", "optional", cr.Name + suffixDBCA, cr.Name + suffixDBApp, cr.Name + suffixToken} {
 		r := &TadossReconciler{Client: fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(cr.DeepCopy()).WithIndex(&tadossv1.Tadoss{}, tadossReferenceIndex, tadossReferenceIndexValue).Build()}
 		requests := r.secretRequests(context.Background(), &metav1.PartialObjectMetadata{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: cr.Namespace}})
 		if len(requests) != 1 || requests[0].NamespacedName != client.ObjectKeyFromObject(cr) {

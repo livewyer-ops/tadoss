@@ -132,6 +132,7 @@ def decode_cursor(page: str | None, reverse: bool) -> EventCursor | None:
             or key[2].is_nan()
         ):
             raise ValueError("cursor shape")
+        validate(identifier, contract_schema("uuid"))
         return key
     except (ValueError, TypeError, KeyError, InvalidOperation, binascii.Error) as exc:
         raise APIError(400, "Invalid page cursor") from exc

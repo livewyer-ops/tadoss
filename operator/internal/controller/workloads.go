@@ -30,7 +30,7 @@ func (r *TadossReconciler) reconcileWorkloads(ctx context.Context, t *tadossv1.T
 			return ctrl.Result{}, err
 		}
 	}
-	if err := r.prune(ctx, t, currentJob); err != nil {
+	if err := r.prune(ctx, t, currentJob, set); err != nil {
 		return ctrl.Result{}, err
 	}
 	deployment := set.Deployment

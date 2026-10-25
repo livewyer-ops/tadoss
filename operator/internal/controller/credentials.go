@@ -45,12 +45,15 @@ func (r *TadossReconciler) reconcileCredentials(ctx context.Context, t *tadossv1
 	t.Status.DatabaseSecret, t.Status.TokenSecret = database.Name, token.Name
 	databaseReferences := []client.Object{database}
 	credentialReferences := []client.Object{database, token}
-	for _, name := range referencedSecrets(t) {
+	for name, required := range referencedSecrets(t) {
 		if name == "" || name == database.Name || name == token.Name {
 			continue
 		}
 		secret := &corev1.Secret{}
 		if err := r.Get(ctx, client.ObjectKey{Namespace: t.Namespace, Name: name}, secret); err != nil {
+			if !required && apierrors.IsNotFound(err) {
+				continue
+			}
 			result, err := r.pending(ctx, t, "ReferencedSecretMissing", "A referenced Secret is unavailable")
 			return nil, result, err
 		}
@@ -143,22 +146,25 @@ func randomToken() ([]byte, error) {
 	return []byte(base64.RawURLEncoding.EncodeToString(random)), nil
 }
 
-func referencedSecrets(t *tadossv1.Tadoss) []string {
-	names := []string{t.Spec.Auth.TokenSecret, t.Spec.Auth.BasicSecret, t.Spec.Backends.DB.External.ExistingSecret}
+// referencedSecrets records whether each Secret is required by any reference.
+func referencedSecrets(t *tadossv1.Tadoss) map[string]bool {
+	required := map[string]bool{t.Spec.Auth.TokenSecret: true, t.Spec.Auth.BasicSecret: true, t.Spec.Backends.DB.External.ExistingSecret: true}
 	for _, workload := range []tadossv1.WorkloadSpec{t.Spec.API, t.Spec.Worker} {
 		for _, source := range workload.EnvFrom {
-			if source.SecretRef != nil && !ptr.Deref(source.SecretRef.Optional, false) {
-				names = append(names, source.SecretRef.Name)
+			if source.SecretRef != nil {
+				name := source.SecretRef.Name
+				required[name] = required[name] || !ptr.Deref(source.SecretRef.Optional, false)
 			}
 		}
 		for _, volume := range workload.Volumes {
-			if volume.Secret != nil && !ptr.Deref(volume.Secret.Optional, false) {
-				names = append(names, volume.Secret.SecretName)
+			if volume.Secret != nil {
+				name := volume.Secret.SecretName
+				required[name] = required[name] || !ptr.Deref(volume.Secret.Optional, false)
 			}
 		}
 	}
-	slices.Sort(names)
-	return slices.Compact(names)
+	delete(required, "")
+	return required
 }
 
 // referenceFingerprint tracks API object revisions without hashing credential bytes.

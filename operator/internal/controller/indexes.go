@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"maps"
 	"slices"
 
 	tadossv1 "github.com/livewyer-ops/tadoss/operator/api/v1alpha1"
@@ -14,7 +15,7 @@ func tadossReferenceIndexValue(obj client.Object) []string {
 	if !ok {
 		return nil
 	}
-	names := append(referencedSecrets(t), t.Name+suffixToken, t.Name+suffixDBApp, t.Name+suffixDBCA)
+	names := append(slices.Collect(maps.Keys(referencedSecrets(t))), t.Name+suffixToken, t.Name+suffixDBApp, t.Name+suffixDBCA)
 	if ca := t.Spec.Backends.DB.External.CAConfigMap; ca != nil {
 		names = append(names, ca.Name)
 	}

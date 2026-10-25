@@ -36,7 +36,7 @@ func (r *TadossReconciler) apply(ctx context.Context, t *tadossv1.Tadoss, desire
 	return err
 }
 
-func (r *TadossReconciler) prune(ctx context.Context, t *tadossv1.Tadoss, currentJob string) error {
+func (r *TadossReconciler) prune(ctx context.Context, t *tadossv1.Tadoss, currentJob string, desired workloadSet) error {
 	var stale []client.Object
 	key := client.ObjectKey{Namespace: t.Namespace, Name: t.Name + suffixAPI}
 	if t.Spec.Ingress.Host == "" {
@@ -46,18 +46,14 @@ func (r *TadossReconciler) prune(ctx context.Context, t *tadossv1.Tadoss, curren
 		}
 		stale = append(stale, ingress)
 	}
-	if replicas(t) <= 1 && t.Spec.API.MinAvailable == nil {
+	if desired.Budget == nil {
 		budget, err := r.owned(ctx, t, key, &policyv1.PodDisruptionBudget{})
 		if err != nil {
 			return err
 		}
 		stale = append(stale, budget)
 	}
-	workerReplicas := replicas(t)
-	if t.Spec.Worker.ReplicaCount != nil {
-		workerReplicas = *t.Spec.Worker.ReplicaCount
-	}
-	if workerReplicas <= 1 && t.Spec.Worker.MinAvailable == nil {
+	if desired.WorkerBudget == nil {
 		budget, err := r.owned(ctx, t, client.ObjectKey{Namespace: t.Namespace, Name: t.Name + "-worker"}, &policyv1.PodDisruptionBudget{})
 		if err != nil {
 			return err
