@@ -1,0 +1,50 @@
+name: Bug report
+description: Report a reproducible bug
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: textarea
+    attributes:
+      label: What happened
+      description: Describe the observed behaviour and impact.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Steps to reproduce
+      description: Provide the smallest sequence of commands or actions that reproduces the issue.
+      placeholder: |
+        1. Run ...
+        2. Open ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Expected behaviour
+      description: Describe what should have happened.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Environment
+      description: Include the release or revision, profile, operating system, deployment target, and tool versions.
+      placeholder: |
+        - Release/revision:
+        - Profile:
+        - OS:
+        - Deployment target: Kind / remote Kubernetes / native dev
+        - Kubernetes:
+        - Docker or Podman:
+        - Task:
+        - kubectl:
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Evidence
+      description: >-
+        Add logs, screenshots, command output, or links that help diagnose the issue.
+        Include a reviewed redacted support bundle when useful. Never include credentials or customer payloads.
+    validations:
+      required: false

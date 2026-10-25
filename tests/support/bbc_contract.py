@@ -2,17 +2,13 @@
 
 import json
 from functools import cache
-from pathlib import Path
 
 import yaml
 from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT202012
 
-BBC_API_SPEC_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "src/vendor/bbc-tads/api/TimeAddressableDataStore.yaml"
-)
+from tests.support.paths import BBC_API_SPEC_PATH
 
 
 @cache
