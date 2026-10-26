@@ -67,6 +67,9 @@ func pod(t *tadossv1.Tadoss, databaseSecret, tokenSecret string) corev1.PodTempl
 	container := &template.Spec.Containers[0]
 	if tokenSecret != "" && ptr.Deref(t.Spec.Auth.TokenEnabled, true) {
 		container.Env = append(container.Env, secretKeyEnv("TADOSS_API_TOKEN", tokenSecret, "token"))
+	} else if !ptr.Deref(t.Spec.Auth.TokenEnabled, true) {
+		// Explicit blanks also override credentials inherited through envFrom.
+		container.Env = append(container.Env, corev1.EnvVar{Name: "TADOSS_API_TOKEN"}, corev1.EnvVar{Name: "TADOSS_API_TOKEN_FILE"})
 	}
 	container.Env = append(container.Env, corev1.EnvVar{Name: "TADOSS_HOST", Value: "0.0.0.0"})
 	if t.Spec.Auth.BasicSecret != "" {
