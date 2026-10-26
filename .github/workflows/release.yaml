@@ -94,6 +94,12 @@ jobs:
         with:
           submodules: recursive
       - uses: ./.github/actions/setup
+      - name: Free disk space for multi-node Kind
+        if: matrix.profile == 'multi-server'
+        run: |
+          # Each Kind node stores its own PostgreSQL and platform images.
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet
+          df -h /
       - name: Qualify immutable images
         env:
           RUNTIME_IMAGE: ${{ needs.candidate.outputs.runtime }}
