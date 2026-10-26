@@ -3,7 +3,7 @@ kind: Tadoss
 metadata:
   name: journey
 spec:
-  version: 0.1.0
+  version: 0.1.0-rc1
   profile: local-kind
   api:
     image: ($values.apiImage)

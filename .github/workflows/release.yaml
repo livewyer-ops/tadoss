@@ -148,4 +148,4 @@ jobs:
             actual=$(docker buildx imagetools inspect "$repository:$version" --format '{{.Manifest.Digest}}')
             test "$actual" = "${image#*@}"
           done
-          gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes dist/*
+          gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --prerelease="${{ contains(github.ref_name, '-') }}" dist/*

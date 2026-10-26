@@ -18,7 +18,7 @@ func TestReleaseSelectionPrecedesManagedChanges(t *testing.T) {
 	for _, tc := range []struct{ name, current, pending, reason string }{
 		{"install", "", "", "ReleasePending"},
 		{"unsupported transition", "unknown", "", "UnsupportedUpgrade"},
-		{"interrupted upgrade", "0.1.0", "other", "UpgradeInProgress"},
+		{"interrupted upgrade", "0.1.0-rc1", "other", "UpgradeInProgress"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cr := instance()

@@ -56,7 +56,7 @@ JWT verification requires `exp`, `sub`, `iss` and `aud`; the nonempty `sub` is t
 
 | Field | Effective default |
 | --- | --- |
-| `version` | Required; currently `0.1.0` |
+| `version` | Required; currently `0.1.0-rc1` |
 | `profile` | Installation default; otherwise required on the instance |
 | `api.image` / `worker.image` | Release catalogue / resolved API image |
 | `api.imagePullPolicy`, `worker.imagePullPolicy` | `IfNotPresent` |

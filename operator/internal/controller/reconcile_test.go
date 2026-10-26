@@ -32,7 +32,7 @@ func newNamespace(t *testing.T) string {
 func newInstance(namespace, name string, protected bool) *tadossv1.Tadoss {
 	return &tadossv1.Tadoss{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
-		Spec:       tadossv1.TadossSpec{Version: "0.1.0", Profile: tadossv1.ProfileLocalKind, API: tadossv1.WorkloadSpec{Image: "livewyer/tadoss-api:test"}, DeletionProtection: ptr.To(protected)},
+		Spec:       tadossv1.TadossSpec{Version: "0.1.0-rc1", Profile: tadossv1.ProfileLocalKind, API: tadossv1.WorkloadSpec{Image: "livewyer/tadoss-api:test"}, DeletionProtection: ptr.To(protected)},
 	}
 }
 
@@ -259,7 +259,7 @@ func TestAdmissionRules(t *testing.T) {
 		obj := &unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": "tadoss.livewyer.io/v1alpha1", "kind": "Tadoss",
 			"metadata": map[string]any{"name": "invalid", "namespace": namespace},
-			"spec":     map[string]any{"version": "0.1.0", "ingress": map[string]any{"className": ""}},
+			"spec":     map[string]any{"version": "0.1.0-rc1", "ingress": map[string]any{"className": ""}},
 		}}
 		if err := live.Create(ctx, obj); err == nil || !strings.Contains(err.Error(), "className") {
 			t.Fatalf("empty className accepted: %v", err)

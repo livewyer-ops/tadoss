@@ -68,7 +68,7 @@ apiVersion: tadoss.livewyer.io/v1alpha1
 kind: Tadoss
 metadata: {name: reattached, namespace: tads}
 spec:
-  version: 0.1.0
+  version: 0.1.0-rc1
   profile: single-server
   worker: {replicaCount: 0}
   backends:

@@ -1,5 +1,5 @@
 {
-  "version": "0.1.0",
+  "version": "0.1.0-rc1",
   "apiVersion": "0.1",
   "upstreamRevision": "d2b90e52d54db947f4c8ddab571538ed18ab3052",
   "schemaTarget": "0001_baseline",

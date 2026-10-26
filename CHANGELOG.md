@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-rc1
+
+First release candidate implementing the pinned BBC TADS 0.1 contract. This candidate requires a fresh database or the documented export/import process for earlier development schemas.
 
 - Qualify authenticated event workflows, pagination and HEAD responses through verified HTTPS ingress; separate contract and semantic test reports and include authentication in fast checks.
 - Return the BBC-required updated webhook body with HTTP 200 after PUT, and include deletion-list reverse-order headers on GET and HEAD.

@@ -13,7 +13,7 @@ import (
 
 func TestResolvePrecedenceAndValidation(t *testing.T) {
 	installation := Installation{Profile: "edge", BaseDomain: "example.com", IngressClassName: "traefik", Revision: "revision"}
-	source := &tadossv1.Tadoss{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "team"}, Spec: tadossv1.TadossSpec{Version: "0.1.0"}}
+	source := &tadossv1.Tadoss{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "team"}, Spec: tadossv1.TadossSpec{Version: "0.1.0-rc1"}}
 	resolved := source.DeepCopy()
 	if err := Resolve(resolved, installation); err != nil {
 		t.Fatal(err)
@@ -32,7 +32,7 @@ func TestResolvePrecedenceAndValidation(t *testing.T) {
 			t.Fatal("unsupported version accepted")
 		}
 	}
-	resolved.Spec.Version = "0.1.0"
+	resolved.Spec.Version = "0.1.0-rc1"
 	resolved.Spec.API.Resources = corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")}, Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("64Mi")}}
 	if Resolve(resolved, installation) == nil {
 		t.Fatal("invalid explicit resources accepted")
@@ -59,12 +59,12 @@ func TestResolveRejectsMalformedOAuthAndIngressClass(t *testing.T) {
 		{Issuer: "https://issuer.example", Audience: "tadoss", JWKSURI: "http://issuer.example/jwks"},
 		{Algorithms: []string{"HS256"}},
 	} {
-		cr := &tadossv1.Tadoss{Spec: tadossv1.TadossSpec{Version: "0.1.0", Profile: "edge", Auth: tadossv1.AuthSpec{OAuth2: oauth}}}
+		cr := &tadossv1.Tadoss{Spec: tadossv1.TadossSpec{Version: "0.1.0-rc1", Profile: "edge", Auth: tadossv1.AuthSpec{OAuth2: oauth}}}
 		if Resolve(cr, Installation{}) == nil {
 			t.Fatal("invalid OAuth accepted")
 		}
 	}
-	cr := &tadossv1.Tadoss{Spec: tadossv1.TadossSpec{Version: "0.1.0", Profile: "edge"}}
+	cr := &tadossv1.Tadoss{Spec: tadossv1.TadossSpec{Version: "0.1.0-rc1", Profile: "edge"}}
 	if Resolve(cr, Installation{IngressClassName: "INVALID_CLASS"}) == nil {
 		t.Fatal("invalid installation ingress class accepted")
 	}

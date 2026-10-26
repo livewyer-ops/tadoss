@@ -4,6 +4,8 @@ Edit `src/app/tadoss/release.json` and the operator catalogue together. Retain s
 
 The release workflow checks the tag, builds and scans the multi-architecture runtime image, writes its exact digest into the operator catalogue, then builds the operator image. It qualifies those digest references, assembles install YAML and compatibility metadata, and signs the images and checksum file. SBOM and provenance are attached to image builds. Release assets include the catalogue, install manifest, compatibility matrix and checksums.
 
+Tags use `v<version>`, matching the runtime release metadata exactly. A version with a prerelease suffix, such as `0.1.0-rc1`, is published as a GitHub prerelease.
+
 Do not replace an existing version. Failed candidate images may remain under commit-specific candidate tags; version tags and GitHub release assets are published only after qualification. Updating a release requires a new version and tag.
 
 Local artifact generation requires an operator built with the same runtime digest in its embedded catalogue. The artifact command refuses a catalogue mismatch or a nonempty output directory:

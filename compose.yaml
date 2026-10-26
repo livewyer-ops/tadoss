@@ -17,7 +17,7 @@ services:
   tadoss:
     profiles: [app]
     build: .
-    image: livewyer/tadoss-api:0.1.0
+    image: livewyer/tadoss-api:0.1.0-rc1
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -39,7 +39,7 @@ services:
   migrate:
     profiles: [app]
     build: .
-    image: livewyer/tadoss-api:0.1.0
+    image: livewyer/tadoss-api:0.1.0-rc1
     command: [tadoss, migrate]
     depends_on:
       db:
@@ -48,7 +48,7 @@ services:
       TADOSS_DATABASE: postgresql://tadoss:tadoss@db:5432/tadoss
   worker:
     profiles: [app]
-    image: livewyer/tadoss-api:0.1.0
+    image: livewyer/tadoss-api:0.1.0-rc1
     command: [tadoss, worker]
     healthcheck:
       test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/readyz')"]

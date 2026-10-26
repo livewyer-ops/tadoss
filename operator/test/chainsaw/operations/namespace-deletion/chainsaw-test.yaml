@@ -33,7 +33,7 @@ spec:
           spec:
             profile: local-kind
             deletionProtection: true
-            version: 0.1.0
+            version: 0.1.0-rc1
             api:
               image: ($values.apiImage)
             backends:
