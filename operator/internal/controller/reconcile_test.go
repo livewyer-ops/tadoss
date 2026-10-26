@@ -237,7 +237,8 @@ func TestAdmissionRules(t *testing.T) {
 		"managed with secret": {func(cr *tadossv1.Tadoss) {
 			cr.Spec.Backends.DB = tadossv1.DatabaseBackendSpec{ProvidedBy: "invalid"}
 		}, "Unsupported value"},
-		"incomplete oauth": {func(cr *tadossv1.Tadoss) { cr.Spec.Auth.OAuth2.Issuer = "https://issuer.example" }, "supplied together"},
+		"no authentication": {func(cr *tadossv1.Tadoss) { cr.Spec.Auth.TokenEnabled = ptr.To(false) }, "disabling query tokens requires"},
+		"incomplete oauth":  {func(cr *tadossv1.Tadoss) { cr.Spec.Auth.OAuth2.Issuer = "https://issuer.example" }, "supplied together"},
 		"insecure oauth": {func(cr *tadossv1.Tadoss) {
 			cr.Spec.Auth.OAuth2 = tadossv1.OAuth2Spec{Issuer: "http://issuer.example", Audience: "tadoss", JWKSURI: "https://issuer.example/jwks"}
 		}, "https://"},

@@ -69,6 +69,15 @@ tasks:
         vars: {ENV_DIR: '{{.KIND_ENV}}'}
       - task: :env:wait
         vars: {ENV_DIR: '{{.KIND_ENV}}'}
+      - 'printf "Access credentials: task kind:credentials CLUSTER=%s PROFILE=%s KUBECONFIG=%s\n" {{.CLUSTER | shellQuote}} {{.PROFILE | shellQuote}} {{.KUBECONFIG | shellQuote | shellQuote}}'
+  credentials:
+    desc: Print shell exports for a Kind instance's kubeconfig, API URL and authentication
+    silent: true
+    cmds:
+      - task: :env:credentials
+        vars:
+          ENV_DIR: '{{.KIND_ENV}}'
+          INSTANCE: '{{.INSTANCE | default "tadoss"}}'
   test:
     desc: Qualify the selected profile, including strict idempotence
     cmds:

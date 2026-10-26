@@ -4051,6 +4051,11 @@ spec:
                       audience:
                         minLength: 1
                         type: string
+                      clientCredentialsSecret:
+                        description: ClientCredentialsSecret is read by access tooling,
+                          never mounted into API or worker pods.
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                        type: string
                       deleteScope:
                         type: string
                       issuer:
@@ -4070,10 +4075,18 @@ spec:
                     - message: issuer, audience and jwksURI must be supplied together
                       rule: (has(self.issuer) && has(self.audience) && has(self.jwksURI))
                         || (!has(self.issuer) && !has(self.audience) && !has(self.jwksURI))
+                  tokenEnabled:
+                    description: TokenEnabled defaults to true for compatibility with
+                      existing installations.
+                    type: boolean
                   tokenSecret:
                     pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                     type: string
                 type: object
+                x-kubernetes-validations:
+                - message: disabling query tokens requires Basic or OAuth2 authentication
+                  rule: '!has(self.tokenEnabled) || self.tokenEnabled || has(self.basicSecret)
+                    || (has(self.oauth2) && has(self.oauth2.issuer))'
               backends:
                 default:
                   db:
@@ -9881,7 +9894,7 @@ metadata:
     app.kubernetes.io/instance: tadoss-operator
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/name: tadoss-operator
-    app.kubernetes.io/version: 0.1.0-rc1
+    app.kubernetes.io/version: 0.1.0-rc2
   name: tadoss-operator
   namespace: tadoss-system
 ---
@@ -9892,7 +9905,7 @@ metadata:
     app.kubernetes.io/instance: tadoss-operator
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/name: tadoss-operator
-    app.kubernetes.io/version: 0.1.0-rc1
+    app.kubernetes.io/version: 0.1.0-rc2
   name: tadoss-operator-leader-election
   namespace: tadoss-system
 rules:
@@ -10063,7 +10076,7 @@ metadata:
     app.kubernetes.io/instance: tadoss-operator
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/name: tadoss-operator
-    app.kubernetes.io/version: 0.1.0-rc1
+    app.kubernetes.io/version: 0.1.0-rc2
   name: tadoss-system-tadoss-operator-metrics-reader
 rules:
 - nonResourceURLs:
@@ -10078,7 +10091,7 @@ metadata:
     app.kubernetes.io/instance: tadoss-operator
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/name: tadoss-operator
-    app.kubernetes.io/version: 0.1.0-rc1
+    app.kubernetes.io/version: 0.1.0-rc2
   name: tadoss-operator-leader-election
   namespace: tadoss-system
 roleRef:
@@ -10097,7 +10110,7 @@ metadata:
     app.kubernetes.io/instance: tadoss-operator
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/name: tadoss-operator
-    app.kubernetes.io/version: 0.1.0-rc1
+    app.kubernetes.io/version: 0.1.0-rc2
   name: tadoss-system-tadoss-operator-manager
 roleRef:
   apiGroup: rbac.authorization.k8s.io
@@ -10115,7 +10128,7 @@ metadata:
     app.kubernetes.io/instance: tadoss-operator
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/name: tadoss-operator
-    app.kubernetes.io/version: 0.1.0-rc1
+    app.kubernetes.io/version: 0.1.0-rc2
   name: tadoss-operator-metrics
   namespace: tadoss-system
 spec:
@@ -10134,7 +10147,7 @@ metadata:
     app.kubernetes.io/instance: tadoss-operator
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/name: tadoss-operator
-    app.kubernetes.io/version: 0.1.0-rc1
+    app.kubernetes.io/version: 0.1.0-rc2
   name: tadoss-operator
   namespace: tadoss-system
 spec:
@@ -10156,7 +10169,7 @@ spec:
         - --metrics-secure=true
         - --zap-log-level=info
         - --zap-encoder=json
-        image: livewyer/tadoss-operator:0.1.0-rc1
+        image: livewyer/tadoss-operator:0.1.0-rc2
         imagePullPolicy: IfNotPresent
         livenessProbe:
           httpGet:
@@ -10199,7 +10212,7 @@ metadata:
     app.kubernetes.io/instance: tadoss-operator
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/name: tadoss-operator
-    app.kubernetes.io/version: 0.1.0-rc1
+    app.kubernetes.io/version: 0.1.0-rc2
   name: tadoss-system-tadoss-operator-deletion-protection
 spec:
   failurePolicy: Fail
@@ -10231,7 +10244,7 @@ metadata:
     app.kubernetes.io/instance: tadoss-operator
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/name: tadoss-operator
-    app.kubernetes.io/version: 0.1.0-rc1
+    app.kubernetes.io/version: 0.1.0-rc2
   name: tadoss-system-tadoss-operator-deletion-protection
 spec:
   policyName: tadoss-system-tadoss-operator-deletion-protection

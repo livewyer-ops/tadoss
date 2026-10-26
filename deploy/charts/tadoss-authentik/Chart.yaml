@@ -1,0 +1,5 @@
+apiVersion: v2
+name: tadoss-authentik
+description: Database and OAuth2 blueprint for an independent TADOSS issuer
+type: application
+version: 0.1.0

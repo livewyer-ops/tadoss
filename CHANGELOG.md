@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.0-rc2
+
+Upgrades from RC1 retain the `0001_baseline` database and existing data.
+
+- Support tag names containing slashes, percent escapes and Unicode on Payload Schemas and Tracks.
+- Enforce read-only Track restrictions before checking whether a deleted property exists.
+- Reject malformed event request bodies with HTTP 400 before writing any events. Structurally valid requests retain per-event errors for schema, overlap and editing restrictions.
+- Export live instance credentials with `env:credentials` and `kind:credentials`. Prefer configured OAuth2 client credentials and identify query-token authentication explicitly.
+- Add an optional, independent Authentik deployment with client-credentials scopes and a separate PostgreSQL database.
+- Allow disabling query tokens when OAuth2 or Basic authentication is configured. Keep existing Secrets for rollback and keep OAuth client secrets out of API and worker pods.
+
 ## 0.1.0-rc1
 
 First release candidate implementing the pinned BBC TADS 0.1 contract. This candidate requires a fresh database or the documented export/import process for earlier development schemas.

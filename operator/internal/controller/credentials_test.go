@@ -12,6 +12,32 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
+func TestOAuthOnlyOmitsQueryTokenAndPreservesSecret(t *testing.T) {
+	cr := instance()
+	cr.Spec.Auth.TokenEnabled = ptr.To(false)
+	cr.Spec.Auth.OAuth2 = tadossv1.OAuth2Spec{Issuer: "https://auth.example/application/o/tadoss/", Audience: "tadoss", JWKSURI: "https://auth.example/jwks", ClientCredentialsSecret: "oauth-client"}
+	cr.Spec.Backends.DB.ProvidedBy = tadossv1.ProviderExternal
+	database := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "database", Namespace: cr.Namespace}}
+	token := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: cr.Name + suffixToken, Namespace: cr.Namespace}, Data: map[string][]byte{"token": []byte("retained")}}
+	scheme := testScheme(t)
+	r := &TadossReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(database, token).Build(), Scheme: scheme}
+	credentials, _, err := r.reconcileCredentials(context.Background(), cr, database)
+	if err != nil || credentials == nil || credentials.token != nil || cr.Status.TokenSecret != "" {
+		t.Fatalf("OAuth-only credentials: %v, %v", credentials, err)
+	}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(token), &corev1.Secret{}); err != nil {
+		t.Fatal("disabled token must be retained for rollback", err)
+	}
+	set := workloads(cr, database.Name, "", "revision")
+	for _, deployment := range []corev1.PodTemplateSpec{set.Deployment.Spec.Template, set.Worker.Spec.Template} {
+		for _, env := range deployment.Spec.Containers[0].Env {
+			if env.Name == "TADOSS_API_TOKEN" || (env.ValueFrom != nil && env.ValueFrom.SecretKeyRef != nil && env.ValueFrom.SecretKeyRef.Name == "oauth-client") {
+				t.Fatalf("client credentials leaked into workload: %s", env.Name)
+			}
+		}
+	}
+}
+
 func TestOptionalSecretLifecycleChangesWorkloadFingerprint(t *testing.T) {
 	for _, source := range []string{"envFrom", "volume"} {
 		t.Run(source, func(t *testing.T) {

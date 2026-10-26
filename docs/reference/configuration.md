@@ -56,7 +56,7 @@ JWT verification requires `exp`, `sub`, `iss` and `aud`; the nonempty `sub` is t
 
 | Field | Effective default |
 | --- | --- |
-| `version` | Required; currently `0.1.0-rc1` |
+| `version` | Required; currently `0.1.0-rc2` |
 | `profile` | Installation default; otherwise required on the instance |
 | `api.image` / `worker.image` | Release catalogue / resolved API image |
 | `api.imagePullPolicy`, `worker.imagePullPolicy` | `IfNotPresent` |
@@ -68,6 +68,8 @@ JWT verification requires `exp`, `sub`, `iss` and `aud`; the nonempty `sub` is t
 | `backends.db.cnpg.image` | Pinned PostgreSQL 18.4 standard image; system variant when backup or restore is enabled |
 | `backends.db.cnpg.resources` | Requests 100m CPU and 128Mi; limits 1 CPU and 1Gi |
 | `backends.db.cnpg.backup.enabled`, `restore.enabled` | false |
+| `auth.tokenEnabled` | `true`; set `false` with OAuth2 or Basic to disable query tokens |
+| `auth.oauth2.clientCredentialsSecret` | Optional same-namespace Secret for access tooling; keys `client_id`, `client_secret`, `token_endpoint`, `scopes` |
 | `auth.tokenSecret` | Generated `<instance>-api-token`; key `token` |
 | `auth.basicSecret` | Unset; keys `username` and `password` when supplied |
 | `auth.oauth2.algorithms` | `RS256` |

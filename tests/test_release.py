@@ -32,6 +32,7 @@ def test_catalogue_publication_preserves_previous_releases(tmp_path, monkeypatch
     for relative in (
         "operator/internal/releases/catalogue.json",
         "deploy/platform/helmfile.yaml.gotmpl",
+        "deploy/authentik/helmfile.yaml.gotmpl",
     ):
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -39,11 +40,11 @@ def test_catalogue_publication_preserves_previous_releases(tmp_path, monkeypatch
     path = tmp_path / "operator/internal/releases/catalogue.json"
     entries = json.loads(path.read_text())
     old = {
-        **entries[0],
+        **entries[-1],
         "version": "previous",
         "apiImage": "example/api@sha256:" + "b" * 64,
     }
-    entries[0]["upgradeFrom"] = [old["version"]]
+    entries[-1]["upgradeFrom"] = [old["version"]]
     entries.insert(0, old)
     path.write_text(json.dumps(entries))
     monkeypatch.setattr(release, "ROOT", tmp_path)
@@ -52,13 +53,13 @@ def test_catalogue_publication_preserves_previous_releases(tmp_path, monkeypatch
     release.main()
     written = json.loads(path.read_text())
     assert written[0] == old
-    assert written[1] == {**entries[1], "apiImage": image}
+    assert written[-1] == {**entries[-1], "apiImage": image}
     for predecessors in (
         ["unknown"],
-        [written[1]["version"]],
+        [written[-1]["version"]],
         ["previous", "previous"],
     ):
-        written[1]["upgradeFrom"] = predecessors
+        written[-1]["upgradeFrom"] = predecessors
         path.write_text(json.dumps(written))
         with pytest.raises(ValueError, match="upgradeFrom"):
             release.check()
@@ -161,6 +162,7 @@ def test_metadata_binds_qualified_images(tmp_path, monkeypatch):
     install.write_text((ROOT / "deploy/operator/install.yaml").read_text())
     for relative in (
         "deploy/platform/helmfile.yaml.gotmpl",
+        "deploy/authentik/helmfile.yaml.gotmpl",
         "deploy/kind/single-node.yaml",
         "deploy/profiles.yaml",
     ):
@@ -203,6 +205,7 @@ def test_native_artifacts_pin_images_and_verify_checksums(tmp_path):
         "scripts/release.py",
         "deploy/operator/install.yaml",
         "deploy/platform/helmfile.yaml.gotmpl",
+        "deploy/authentik/helmfile.yaml.gotmpl",
         "deploy/kind/single-node.yaml",
         "deploy/profiles.yaml",
         "operator/internal/releases/catalogue.json",
@@ -215,7 +218,7 @@ def test_native_artifacts_pin_images_and_verify_checksums(tmp_path):
     operator = "registry.example:5000/operator@sha256:" + "b" * 64
     catalogue = tmp_path / "operator/internal/releases/catalogue.json"
     entries = json.loads(catalogue.read_text())
-    entries[0]["apiImage"] = runtime
+    entries[-1]["apiImage"] = runtime
     catalogue.write_text(json.dumps(entries))
     result = subprocess.run(  # noqa: S603 fixed local Task and fixture paths
         [

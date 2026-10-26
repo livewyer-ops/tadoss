@@ -38,15 +38,19 @@ func (r *TadossReconciler) reconcileCredentials(ctx context.Context, t *tadossv1
 		}
 		return nil, ctrl.Result{}, err
 	}
-	if len(token.Data["token"]) == 0 {
+	if token != nil && len(token.Data["token"]) == 0 {
 		result, err := r.pending(ctx, t, "TokenSecretInvalid", "Token Secret must contain token")
 		return nil, result, err
 	}
-	t.Status.DatabaseSecret, t.Status.TokenSecret = database.Name, token.Name
+	t.Status.DatabaseSecret, t.Status.TokenSecret = database.Name, ""
 	databaseReferences := []client.Object{database}
-	credentialReferences := []client.Object{database, token}
+	credentialReferences := []client.Object{database}
+	if token != nil {
+		t.Status.TokenSecret = token.Name
+		credentialReferences = append(credentialReferences, token)
+	}
 	for name, required := range referencedSecrets(t) {
-		if name == "" || name == database.Name || name == token.Name {
+		if name == "" || name == database.Name || name == t.Status.TokenSecret {
 			continue
 		}
 		secret := &corev1.Secret{}
@@ -101,6 +105,9 @@ func (r *TadossReconciler) reconcileCredentials(ctx context.Context, t *tadossv1
 }
 
 func (r *TadossReconciler) token(ctx context.Context, t *tadossv1.Tadoss) (*corev1.Secret, error) {
+	if !ptr.Deref(t.Spec.Auth.TokenEnabled, true) {
+		return nil, nil
+	}
 	name := t.Spec.Auth.TokenSecret
 	generated := name == ""
 	if generated {
@@ -148,7 +155,10 @@ func randomToken() ([]byte, error) {
 
 // referencedSecrets records whether each Secret is required by any reference.
 func referencedSecrets(t *tadossv1.Tadoss) map[string]bool {
-	required := map[string]bool{t.Spec.Auth.TokenSecret: true, t.Spec.Auth.BasicSecret: true, t.Spec.Backends.DB.External.ExistingSecret: true}
+	required := map[string]bool{t.Spec.Auth.BasicSecret: true, t.Spec.Backends.DB.External.ExistingSecret: true}
+	if ptr.Deref(t.Spec.Auth.TokenEnabled, true) {
+		required[t.Spec.Auth.TokenSecret] = true
+	}
 	for _, workload := range []tadossv1.WorkloadSpec{t.Spec.API, t.Spec.Worker} {
 		for _, source := range workload.EnvFrom {
 			if source.SecretRef != nil {

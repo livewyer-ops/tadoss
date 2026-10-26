@@ -18,6 +18,7 @@ env:
 includes:
   dev: .tasks/dev.yaml
   env: .tasks/env.yaml
+  auth: .tasks/auth.yaml
   operator: .tasks/operator.yaml
   test: .tasks/test.yaml
   lint: .tasks/lint.yaml

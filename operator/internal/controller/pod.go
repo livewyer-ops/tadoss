@@ -47,7 +47,7 @@ func pod(t *tadossv1.Tadoss, databaseSecret, tokenSecret string) corev1.PodTempl
 			},
 			Containers: []corev1.Container{{
 				Name: "api", Image: t.Spec.API.Image, ImagePullPolicy: t.Spec.API.ImagePullPolicy,
-				Env:       []corev1.EnvVar{secretKeyEnv("TADOSS_DATABASE", databaseSecret, "uri"), secretKeyEnv("TADOSS_API_TOKEN", tokenSecret, "token")},
+				Env:       []corev1.EnvVar{secretKeyEnv("TADOSS_DATABASE", databaseSecret, "uri")},
 				Ports:     []corev1.ContainerPort{{Name: "http", ContainerPort: apiPort}},
 				Resources: resources,
 				SecurityContext: &corev1.SecurityContext{
@@ -65,6 +65,9 @@ func pod(t *tadossv1.Tadoss, databaseSecret, tokenSecret string) corev1.PodTempl
 	}
 	template.Spec.ImagePullSecrets = t.Spec.ImagePullSecrets
 	container := &template.Spec.Containers[0]
+	if tokenSecret != "" && ptr.Deref(t.Spec.Auth.TokenEnabled, true) {
+		container.Env = append(container.Env, secretKeyEnv("TADOSS_API_TOKEN", tokenSecret, "token"))
+	}
 	container.Env = append(container.Env, corev1.EnvVar{Name: "TADOSS_HOST", Value: "0.0.0.0"})
 	if t.Spec.Auth.BasicSecret != "" {
 		container.Env = append(container.Env, secretKeyEnv("TADOSS_BASIC_AUTH_USERNAME", t.Spec.Auth.BasicSecret, "username"), secretKeyEnv("TADOSS_BASIC_AUTH_PASSWORD", t.Spec.Auth.BasicSecret, "password"))

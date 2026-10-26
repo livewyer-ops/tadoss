@@ -53,9 +53,9 @@ class AccessLog:
             await self.app(scope, receive, record)
         finally:
             route = scope.get("route")
-            template = route.path if route is not None else scope["path"]
+            template = route.path_format if route is not None else scope["path"]
             client = scope.get("client")
-            metric_route = route.path if route is not None else "unmatched"
+            metric_route = route.path_format if route is not None else "unmatched"
             metric_method = (
                 scope["method"]
                 if scope["method"]

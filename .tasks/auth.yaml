@@ -1,0 +1,17 @@
+version: '3'
+set: [errexit, nounset, pipefail]
+vars:
+  AUTH_NAMESPACE: '{{.AUTH_NAMESPACE | default "tads"}}'
+  AUTH_INSTANCE: '{{.INSTANCE | default "tadoss"}}'
+  AUTH_TLS_SECRET: '{{.AUTH_TLS_SECRET | default "tadoss-public-tls"}}'
+tasks:
+  apply:
+    desc: Install an independent Authentik issuer for a TADOSS instance
+    requires:
+      vars: [KUBECONFIG, AUTH_HOST]
+    preconditions:
+      - sh: printf '%s' {{.AUTH_HOST | shellQuote}} | grep -Eq '^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$'
+        msg: AUTH_HOST must be a DNS hostname
+    cmds:
+      - bash scripts/authentik_bootstrap.sh {{.KUBECONFIG | shellQuote}} {{.AUTH_NAMESPACE | shellQuote}} {{.AUTH_INSTANCE | shellQuote}} {{.AUTH_HOST | shellQuote}}
+      - helmfile --kubeconfig {{.KUBECONFIG | shellQuote}} --file deploy/authentik/helmfile.yaml.gotmpl --state-values-set {{printf "hostname=%s,namespace=%s,instance=%s,tlsSecretName=%s" .AUTH_HOST .AUTH_NAMESPACE .AUTH_INSTANCE .AUTH_TLS_SECRET | shellQuote}} sync

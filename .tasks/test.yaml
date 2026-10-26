@@ -30,6 +30,7 @@ tasks:
       - kubectl kustomize deploy/operator > /dev/null
       - for: [local-kind, edge, single-server, multi-server]
         cmd: 'kubectl kustomize deploy/environments/{{.ITEM}}/operator > /dev/null && kubectl kustomize deploy/environments/{{.ITEM}} > /dev/null'
+      - helm lint deploy/charts/tadoss-authentik
       - helm lint deploy/charts/tadoss-issuer
       - helm lint deploy/charts/tadoss-issuer -f deploy/charts/tadoss-issuer/ci/acme-values.yaml
       - uv run --project src --frozen pytest -c src/pyproject.toml -q tests/test_repository.py tests/test_documented_task_commands.py tests/test_chainsaw_native_policy.py

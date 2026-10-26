@@ -138,6 +138,9 @@ type WorkloadSpec struct {
 // OAuth2Spec configures JWT verification and operation scopes.
 // +kubebuilder:validation:XValidation:rule="(has(self.issuer) && has(self.audience) && has(self.jwksURI)) || (!has(self.issuer) && !has(self.audience) && !has(self.jwksURI))",message="issuer, audience and jwksURI must be supplied together"
 type OAuth2Spec struct {
+	// ClientCredentialsSecret is read by access tooling, never mounted into API or worker pods.
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
+	ClientCredentialsSecret string `json:"clientCredentialsSecret,omitempty"`
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:Pattern=`^https://`
 	Issuer string `json:"issuer,omitempty"`
@@ -156,7 +159,10 @@ type OAuth2Spec struct {
 }
 
 // AuthSpec references static credentials and an external JWT issuer.
+// +kubebuilder:validation:XValidation:rule="!has(self.tokenEnabled) || self.tokenEnabled || has(self.basicSecret) || (has(self.oauth2) && has(self.oauth2.issuer))",message="disabling query tokens requires Basic or OAuth2 authentication"
 type AuthSpec struct {
+	// TokenEnabled defaults to true for compatibility with existing installations.
+	TokenEnabled *bool `json:"tokenEnabled,omitempty"`
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
 	TokenSecret string     `json:"tokenSecret,omitempty"`
 	BasicSecret string     `json:"basicSecret,omitempty"`

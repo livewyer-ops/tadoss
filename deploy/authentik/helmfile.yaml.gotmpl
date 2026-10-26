@@ -1,0 +1,63 @@
+values:
+  - instance: tadoss
+    namespace: tads
+    hostname: auth.tadoss.example.com
+    tlsSecretName: tadoss-public-tls
+---
+repositories:
+  - name: goauthentik
+    url: https://charts.goauthentik.io
+helmDefaults:
+  wait: true
+  waitForJobs: true
+  timeout: 900
+releases:
+  - name: {{ .Values.instance }}-authentik-resources
+    namespace: {{ .Values.namespace }}
+    chart: ../charts/tadoss-authentik
+    values:
+      - instance: {{ .Values.instance }}
+  - name: {{ .Values.instance }}-authentik
+    namespace: {{ .Values.namespace }}
+    chart: goauthentik/authentik
+    version: 2026.5.6
+    needs: [{{ .Values.namespace }}/{{ .Values.instance }}-authentik-resources]
+    values:
+      - global:
+          fullnameOverride: {{ .Values.instance }}-authentik
+          env:
+            - name: AUTHENTIK_POSTGRESQL__PASSWORD
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.instance }}-authentik-db-app, key: password}
+            - name: TADOSS_OAUTH_CLIENT_ID
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.instance }}-oauth-client, key: client_id}
+            - name: TADOSS_OAUTH_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.instance }}-oauth-client, key: client_secret}
+        authentik:
+          existingSecret:
+            secretName: {{ .Values.instance }}-authentik-config
+        postgresql:
+          enabled: false
+        blueprints:
+          configMaps: [{{ .Values.instance }}-authentik-blueprint]
+        server:
+          replicas: 1
+          resources:
+            requests: {cpu: 100m, memory: 512Mi}
+            limits: {memory: 1Gi}
+          ingress:
+            enabled: true
+            ingressClassName: traefik
+            annotations:
+              traefik.ingress.kubernetes.io/router.entrypoints: websecure
+            hosts: [{{ .Values.hostname }}]
+            tls:
+              - secretName: {{ .Values.tlsSecretName }}
+                hosts: [{{ .Values.hostname }}]
+        worker:
+          replicas: 1
+          resources:
+            requests: {cpu: 100m, memory: 512Mi}
+            limits: {memory: 1Gi}

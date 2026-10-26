@@ -1,6 +1,9 @@
 import base64
+from urllib.parse import quote
 from uuid import uuid4
 
+import anyio
+import httpx
 from tadoss.api.http import resolve
 from tadoss.domain.validation import (
     SPEC,
@@ -21,6 +24,8 @@ def test_read_only_applies_to_all_mutations(api, subtests) -> None:
         ("PUT", f"/tracks/{TRACK_ID}", api.track),
         ("PUT", f"/tracks/{TRACK_ID}/label", "changed"),
         ("PUT", f"/tracks/{TRACK_ID}/tags/test", "changed"),
+        ("DELETE", f"/tracks/{TRACK_ID}/tags/missing", None),
+        ("DELETE", f"/tracks/{TRACK_ID}/label", None),
         ("PUT", f"/tracks/{TRACK_ID}/allow_overlaps", False),
         ("PUT", f"/tracks/{TRACK_ID}/editable_events", False),
         ("POST", api.events, event()),
@@ -31,6 +36,43 @@ def test_read_only_applies_to_all_mutations(api, subtests) -> None:
             api.send(method, path, body, status=403)
     api.send("PUT", f"/tracks/{TRACK_ID}/read_only", False, status=204)
     api.send("DELETE", api.events, status=204)
+
+
+def test_encoded_tag_names_preserve_identity(api) -> None:
+    # ASGITransport decodes the wire path once, matching Uvicorn.
+    async def exercise():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=api.app),
+            base_url="http://test",
+            headers=dict(api.client.headers),
+        ) as client:
+            for collection, identifier in [
+                ("schemas", SCHEMA_ID),
+                ("tracks", TRACK_ID),
+            ]:
+                root = f"/{collection}/{identifier}/tags"
+                names = ["a/b", "a%2Fb", "check / & ✓", "question? hash# percent%"]
+                for index, name in enumerate(names):
+                    response = await client.put(
+                        root + "/" + quote(name, safe=""), json=[str(index)]
+                    )
+                    assert response.status_code == 204, response.text
+                for index, name in enumerate(names):
+                    path = root + "/" + quote(name, safe="")
+                    response = await client.get(path)
+                    assert response.status_code == 200, response.text
+                    assert response.json() == [str(index)]
+                    head = await client.head(path)
+                    assert head.status_code == 200 and head.content == b""
+                assert (await client.get(root)).json() == dict(
+                    zip(names, [[str(i)] for i in range(len(names))], strict=True)
+                )
+                for name in names:
+                    path = root + "/" + quote(name, safe="")
+                    assert (await client.delete(path)).status_code == 204
+                    assert (await client.get(path)).status_code == 404
+
+    anyio.run(exercise)
 
 
 def test_schema_references_and_property_endpoints(api) -> None:

@@ -5,9 +5,9 @@ from tadoss.adapters import postgres as store
 from tadoss.api.dependencies import Body, Database, Query
 from tadoss.api.http import (
     collection_page,
-    property_body,
     property_value,
     read_response,
+    validate_body,
 )
 from tadoss.application import records
 
@@ -51,8 +51,8 @@ def delete_schema(request: Request, schema_id: str, db: Database) -> Response:
 @router.get("/schemas/{schema_id}/schema")
 @router.head("/schemas/{schema_id}/tags")
 @router.get("/schemas/{schema_id}/tags")
-@router.head("/schemas/{schema_id}/tags/{name}")
-@router.get("/schemas/{schema_id}/tags/{name}")
+@router.head("/schemas/{schema_id}/tags/{name:path}")
+@router.get("/schemas/{schema_id}/tags/{name:path}")
 @router.head("/schemas/{schema_id}/description")
 @router.get("/schemas/{schema_id}/description")
 @router.head("/schemas/{schema_id}/label")
@@ -65,15 +65,15 @@ def get_property(request: Request, schema_id: str, db: Database) -> Response:
     )
 
 
-@router.put("/schemas/{schema_id}/tags/{name}")
+@router.put("/schemas/{schema_id}/tags/{name:path}")
 @router.put("/schemas/{schema_id}/description")
 @router.put("/schemas/{schema_id}/label")
 @router.put("/schemas/{schema_id}/external_id")
 def put_property(
     request: Request, schema_id: str, db: Database, body: Body
 ) -> Response:
-    field = request.scope["route"].path.split("/")[3]
-    property_body(request, body)
+    field = request.scope["route"].path_format.split("/")[3]
+    validate_body(request, body)
     records.change_property(
         db,
         "schemas",
@@ -87,12 +87,12 @@ def put_property(
     return Response(status_code=204)
 
 
-@router.delete("/schemas/{schema_id}/tags/{name}")
+@router.delete("/schemas/{schema_id}/tags/{name:path}")
 @router.delete("/schemas/{schema_id}/description")
 @router.delete("/schemas/{schema_id}/label")
 @router.delete("/schemas/{schema_id}/external_id")
 def delete_property(request: Request, schema_id: str, db: Database) -> Response:
-    field = request.scope["route"].path.split("/")[3]
+    field = request.scope["route"].path_format.split("/")[3]
     records.change_property(
         db,
         "schemas",

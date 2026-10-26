@@ -83,6 +83,9 @@ func Resolve(t *tadossv1.Tadoss, installation Installation) error {
 		return fmt.Errorf("invalid ingress className")
 	}
 	oauth := t.Spec.Auth.OAuth2
+	if t.Spec.Auth.TokenEnabled != nil && !*t.Spec.Auth.TokenEnabled && oauth.Issuer == "" && t.Spec.Auth.BasicSecret == "" {
+		return fmt.Errorf("disabling query tokens requires Basic or OAuth2 authentication")
+	}
 	if oauth.Issuer != "" || oauth.Audience != "" || oauth.JWKSURI != "" {
 		if oauth.Issuer == "" || oauth.Audience == "" || oauth.JWKSURI == "" {
 			return fmt.Errorf("OAuth2 requires issuer, audience and jwksURI")

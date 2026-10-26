@@ -213,7 +213,7 @@ def collection_page(
 
 
 def property_value(request: Request, document: Document) -> Any:
-    field = request.scope["route"].path.split("/")[3]
+    field = request.scope["route"].path_format.split("/")[3]
     tag = request.path_params.get("name")
     target, key = (document, field) if tag is None else (document["tags"], tag)
     if key not in target:
@@ -221,8 +221,10 @@ def property_value(request: Request, document: Document) -> Any:
     return target[key]
 
 
-def property_body(request: Request, body: Any) -> None:
-    operation = SPEC["paths"][request.scope["route"].path]["put"]
+def validate_body(request: Request, body: Any) -> None:
+    operation = SPEC["paths"][request.scope["route"].path_format][
+        request.method.lower()
+    ]
     validate(body, operation["requestBody"]["content"]["application/json"]["schema"])
 
 

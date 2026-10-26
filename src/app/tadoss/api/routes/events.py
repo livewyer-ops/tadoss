@@ -4,7 +4,7 @@ from fastapi.responses import JSONResponse, Response
 from tadoss import metrics
 from tadoss.adapters import postgres as store
 from tadoss.api.dependencies import Body, Database, Query
-from tadoss.api.http import deletion_response, event_page
+from tadoss.api.http import deletion_response, event_page, validate_body
 from tadoss.application import background, events
 
 router = APIRouter()
@@ -21,6 +21,7 @@ def list_events(
 
 @router.post("/tracks/{track_id}/events")
 def write_events(request: Request, track_id: str, db: Database, body: Body) -> Response:
+    validate_body(request, body)
     metrics.BATCH.observe(len(body) if isinstance(body, list) else 1)
     result = events.write_events(db, store.get(db, "tracks", track_id), body)
     request.state.event_results = [

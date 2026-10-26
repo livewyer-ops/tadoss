@@ -11,7 +11,7 @@ metadata:
   labels:
     app.kubernetes.io/name: tadoss-operator
     app.kubernetes.io/instance: tadoss-operator
-    app.kubernetes.io/version: 0.1.0-rc1
+    app.kubernetes.io/version: 0.1.0-rc2
     app.kubernetes.io/managed-by: kustomize
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -21,7 +21,7 @@ metadata:
   labels:
     app.kubernetes.io/name: tadoss-operator
     app.kubernetes.io/instance: tadoss-operator
-    app.kubernetes.io/version: 0.1.0-rc1
+    app.kubernetes.io/version: 0.1.0-rc2
     app.kubernetes.io/managed-by: kustomize
 rules:
 - nonResourceURLs:
@@ -36,7 +36,7 @@ metadata:
   labels:
     app.kubernetes.io/name: tadoss-operator
     app.kubernetes.io/instance: tadoss-operator
-    app.kubernetes.io/version: 0.1.0-rc1
+    app.kubernetes.io/version: 0.1.0-rc2
     app.kubernetes.io/managed-by: kustomize
 roleRef:
   apiGroup: rbac.authorization.k8s.io
@@ -55,7 +55,7 @@ metadata:
   labels:
     app.kubernetes.io/name: tadoss-operator
     app.kubernetes.io/instance: tadoss-operator
-    app.kubernetes.io/version: 0.1.0-rc1
+    app.kubernetes.io/version: 0.1.0-rc2
     app.kubernetes.io/managed-by: kustomize
 rules:
 - apiGroups:
@@ -86,7 +86,7 @@ metadata:
   labels:
     app.kubernetes.io/name: tadoss-operator
     app.kubernetes.io/instance: tadoss-operator
-    app.kubernetes.io/version: 0.1.0-rc1
+    app.kubernetes.io/version: 0.1.0-rc2
     app.kubernetes.io/managed-by: kustomize
 roleRef:
   apiGroup: rbac.authorization.k8s.io
@@ -105,7 +105,7 @@ metadata:
   labels:
     app.kubernetes.io/name: tadoss-operator
     app.kubernetes.io/instance: tadoss-operator
-    app.kubernetes.io/version: 0.1.0-rc1
+    app.kubernetes.io/version: 0.1.0-rc2
     app.kubernetes.io/managed-by: kustomize
 spec:
   selector:
@@ -124,7 +124,7 @@ metadata:
   labels:
     app.kubernetes.io/name: tadoss-operator
     app.kubernetes.io/instance: tadoss-operator
-    app.kubernetes.io/version: 0.1.0-rc1
+    app.kubernetes.io/version: 0.1.0-rc2
     app.kubernetes.io/managed-by: kustomize
 spec:
   replicas: 1
@@ -146,7 +146,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: manager
-        image: livewyer/tadoss-operator:0.1.0-rc1
+        image: livewyer/tadoss-operator:0.1.0-rc2
         imagePullPolicy: IfNotPresent
         args:
         - --leader-elect=true
@@ -188,7 +188,7 @@ metadata:
   labels:
     app.kubernetes.io/name: tadoss-operator
     app.kubernetes.io/instance: tadoss-operator
-    app.kubernetes.io/version: 0.1.0-rc1
+    app.kubernetes.io/version: 0.1.0-rc2
     app.kubernetes.io/managed-by: kustomize
 spec:
   failurePolicy: Fail
@@ -220,7 +220,7 @@ metadata:
   labels:
     app.kubernetes.io/name: tadoss-operator
     app.kubernetes.io/instance: tadoss-operator
-    app.kubernetes.io/version: 0.1.0-rc1
+    app.kubernetes.io/version: 0.1.0-rc2
     app.kubernetes.io/managed-by: kustomize
 spec:
   policyName: tadoss-system-tadoss-operator-deletion-protection

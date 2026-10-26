@@ -1,8 +1,16 @@
 [
   {
     "version": "0.1.0-rc1",
-    "apiImage": "livewyer/tadoss-api:0.1.0-rc1",
+    "apiImage": "livewyer/tadoss-api@sha256:a715e3b046febc34941aee6376d05f416146617469939c3116a47643258eda05",
     "schemaTarget": "0001_baseline",
     "upgradeFrom": []
+  },
+  {
+    "version": "0.1.0-rc2",
+    "apiImage": "livewyer/tadoss-api:0.1.0-rc2",
+    "schemaTarget": "0001_baseline",
+    "upgradeFrom": [
+      "0.1.0-rc1"
+    ]
   }
 ]

@@ -17,7 +17,8 @@ REGISTERED_PATHS = get_openapi(title="Routes", version="test", routes=router.rou
     "paths"
 ]
 PATHS = [
-    (path, compile_path(path)[0], item) for path, item in bbc_spec()["paths"].items()
+    (path, compile_path(path.replace("{name}", "{name:path}"))[0], item)
+    for path, item in bbc_spec()["paths"].items()
 ]
 
 

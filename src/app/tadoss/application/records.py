@@ -53,6 +53,8 @@ def change_property(
     remove: bool = False,
 ) -> None:
     document = store.get(db, table, identifier)
+    if table == "tracks" and field != "read_only":
+        writable(document)
     old = copy.deepcopy(document)
     target = document if tag is None else document["tags"]
     key = field if tag is None else tag

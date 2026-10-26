@@ -5,7 +5,7 @@ metadata:
   name: archive-external
   namespace: tads
 spec:
-  version: 0.1.0-rc1
+  version: 0.1.0-rc2
   profile: single-server
   deletionProtection: true
   auth:

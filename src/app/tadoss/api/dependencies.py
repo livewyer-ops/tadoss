@@ -48,7 +48,7 @@ async def json_body(
 
 
 def options(request: Request, _body: Annotated[Any, Depends(json_body)]) -> Options:
-    path = request.scope["route"].path
+    path = request.scope["route"].path_format
     method = "get" if request.method == "HEAD" else request.method.lower()
     result = query_options(request, path, method)
     for name, value in request.path_params.items():

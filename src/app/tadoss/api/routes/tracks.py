@@ -6,9 +6,9 @@ from tadoss.api.dependencies import Body, Database, Query
 from tadoss.api.http import (
     collection_page,
     deletion_response,
-    property_body,
     property_value,
     read_response,
+    validate_body,
 )
 from tadoss.application import background, records
 
@@ -58,8 +58,8 @@ def delete_track(request: Request, track_id: str, db: Database) -> Response:
 
 @router.head("/tracks/{track_id}/tags")
 @router.get("/tracks/{track_id}/tags")
-@router.head("/tracks/{track_id}/tags/{name}")
-@router.get("/tracks/{track_id}/tags/{name}")
+@router.head("/tracks/{track_id}/tags/{name:path}")
+@router.get("/tracks/{track_id}/tags/{name:path}")
 @router.head("/tracks/{track_id}/description")
 @router.get("/tracks/{track_id}/description")
 @router.head("/tracks/{track_id}/label")
@@ -76,15 +76,15 @@ def get_property(request: Request, track_id: str, db: Database) -> Response:
     )
 
 
-@router.put("/tracks/{track_id}/tags/{name}")
+@router.put("/tracks/{track_id}/tags/{name:path}")
 @router.put("/tracks/{track_id}/description")
 @router.put("/tracks/{track_id}/label")
 @router.put("/tracks/{track_id}/read_only")
 @router.put("/tracks/{track_id}/allow_overlaps")
 @router.put("/tracks/{track_id}/editable_events")
 def put_property(request: Request, track_id: str, db: Database, body: Body) -> Response:
-    field = request.scope["route"].path.split("/")[3]
-    property_body(request, body)
+    field = request.scope["route"].path_format.split("/")[3]
+    validate_body(request, body)
     records.change_property(
         db,
         "tracks",
@@ -98,11 +98,11 @@ def put_property(request: Request, track_id: str, db: Database, body: Body) -> R
     return Response(status_code=204)
 
 
-@router.delete("/tracks/{track_id}/tags/{name}")
+@router.delete("/tracks/{track_id}/tags/{name:path}")
 @router.delete("/tracks/{track_id}/description")
 @router.delete("/tracks/{track_id}/label")
 def delete_property(request: Request, track_id: str, db: Database) -> Response:
-    field = request.scope["route"].path.split("/")[3]
+    field = request.scope["route"].path_format.split("/")[3]
     records.change_property(
         db,
         "tracks",

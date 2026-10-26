@@ -24,7 +24,7 @@ import (
 )
 
 func (r *TadossReconciler) reconcileWorkloads(ctx context.Context, t *tadossv1.Tadoss, currentJob string, credentials *credentials) (ctrl.Result, error) {
-	set := workloads(t, credentials.database.Name, credentials.token.Name, referenceFingerprint(credentials.workloadReferences...))
+	set := workloads(t, credentials.database.Name, t.Status.TokenSecret, referenceFingerprint(credentials.workloadReferences...))
 	for _, object := range set.objects() {
 		if err := r.apply(ctx, t, object); err != nil {
 			return ctrl.Result{}, err

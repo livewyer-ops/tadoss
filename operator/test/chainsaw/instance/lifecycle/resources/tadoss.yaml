@@ -6,6 +6,6 @@ spec:
   profile: local-kind
   deletionProtection: false
   deletionPolicy: Delete
-  version: 0.1.0-rc1
+  version: 0.1.0-rc2
   api:
     image: ($values.apiImage)

@@ -43,13 +43,27 @@ task env:status ENV=production KUBECONFIG=/path/to/cluster.yaml
 
 `env:diff` accepts ordinary differences but fails on tool errors. Add `STRICT=true` to fail on differences too. Helmfile sync handles prerequisite dependencies on first installation; use diff before subsequent applies. All commands use the supplied kubeconfig. `INSTANCE=archive` selects one instance; selection uses rendered resources, including namespace and name transformations. To apply only an instance, run `kubectl apply --server-side -k deploy/environments/production/instances/archive` with the intended `KUBECONFIG`.
 
-`env:status` reads no Secrets. Retrieve a token explicitly when needed:
+`env:status` reads no Secrets. Export access credentials for one instance:
 
 ```sh
-export KUBECONFIG=/path/to/cluster.yaml
-secret=$(kubectl -n archive get tadoss archive -o jsonpath='{.status.tokenSecret}')
-kubectl -n archive get secret "$secret" -o jsonpath='{.data.token}' | base64 -d
+credentials=$(task env:credentials ENV=production INSTANCE=archive KUBECONFIG=/path/to/cluster.yaml) && eval "$credentials"
+unset credentials
 ```
+
+The task exports `KUBECONFIG`, `TADOSS_URL` and `TADOSS_AUTH_METHOD`, then
+OAuth client credentials when an issuer is configured, or `TADOSS_API_TOKEN`
+for query authentication. It reads the live instance and fails without
+exports when credentials are unavailable. `INSTANCE` must match the name
+after environment transformations. Use `AUTH_METHOD=oauth|query` to select
+explicitly and `API_URL=https://<host>:<port>` to override the advertised
+endpoint for local access.
+
+The output contains secrets; keep it out of logs and committed files.
+The command evaluates exports only after retrieval succeeds. Kind provides
+`task kind:credentials CLUSTER=<name> PROFILE=local-kind`, with `INSTANCE`
+defaulting to `tadoss`. See [authentication](../docs/how-to/authentication.md)
+for the optional Authentik deployment, credential fields, TLS and TADS
+Checker setup.
 
 ## Install with Helmfile and kubectl
 

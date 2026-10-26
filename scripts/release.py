@@ -47,7 +47,13 @@ def check():
     )
     if current is None or current["schemaTarget"] != RELEASE["schemaTarget"]:
         raise ValueError("Operator catalogue differs from current release")
-    platform = (ROOT / "deploy/platform/helmfile.yaml.gotmpl").read_text()
+    platform = "\n".join(
+        (ROOT / path).read_text()
+        for path in (
+            "deploy/platform/helmfile.yaml.gotmpl",
+            "deploy/authentik/helmfile.yaml.gotmpl",
+        )
+    )
     for chart, version in RELEASE["platformCharts"].items():
         pattern = (
             r"chart: \S*/"

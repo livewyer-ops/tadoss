@@ -43,3 +43,18 @@ task env:status ENV_DIR=.local/environments/tadoss-demo-local-kind KUBECONFIG=.l
 ```
 
 Choose unused host ports and a unique cluster name. Kind tests use self-signed TLS. Production environments need a trusted issuer or an existing TLS Secret. See [deployment](../../deploy/README.md) for environment creation and prerequisite ownership.
+
+Load the cluster's kubeconfig, API URL and authentication into your current shell:
+
+```sh
+credentials=$(task kind:credentials CLUSTER=tadoss-demo) && eval "$credentials"
+unset credentials
+kubectl get pods -n tads
+```
+
+This development setup exports `KUBECONFIG`, `TADOSS_URL`,
+`TADOSS_AUTH_METHOD=query` and `TADOSS_API_TOKEN`. The token uses the
+`access_token` query parameter. Supply `API_URL=https://<ingress-host>:18443`
+for access through this Kind host port and trust the cluster certificate.
+Retrieve credentials again after switching instances or rotating them.
+Shared deployments can use [OAuth2 and Authentik](../how-to/authentication.md).

@@ -4047,6 +4047,11 @@ spec:
                       audience:
                         minLength: 1
                         type: string
+                      clientCredentialsSecret:
+                        description: ClientCredentialsSecret is read by access tooling,
+                          never mounted into API or worker pods.
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                        type: string
                       deleteScope:
                         type: string
                       issuer:
@@ -4066,10 +4071,18 @@ spec:
                     - message: issuer, audience and jwksURI must be supplied together
                       rule: (has(self.issuer) && has(self.audience) && has(self.jwksURI))
                         || (!has(self.issuer) && !has(self.audience) && !has(self.jwksURI))
+                  tokenEnabled:
+                    description: TokenEnabled defaults to true for compatibility with
+                      existing installations.
+                    type: boolean
                   tokenSecret:
                     pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                     type: string
                 type: object
+                x-kubernetes-validations:
+                - message: disabling query tokens requires Basic or OAuth2 authentication
+                  rule: '!has(self.tokenEnabled) || self.tokenEnabled || has(self.basicSecret)
+                    || (has(self.oauth2) && has(self.oauth2.issuer))'
               backends:
                 default:
                   db:

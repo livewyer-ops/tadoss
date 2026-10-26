@@ -23,7 +23,7 @@ def test_bulk_validation_editing_and_global_ids(api) -> None:
         [
             event(id=identifier),
             event(payload={"text": 5}),
-            {"payload": {}},
+            event(payload={}),
             event("[1:0_2:0)"),
         ],
     ).json()
@@ -62,9 +62,9 @@ def test_batch_ownership_prefetch_preserves_partial_success_and_duplicates(api) 
         batch = [
             event(id=identifier),
             event(id=identifier),
-            event(id="bad\x00id"),
-            event(id="bad\ud800id"),
-            event(id=123),
+            event(payload={"text": "bad\x00"}),
+            event(payload={"text": "bad\ud800"}),
+            event(payload={"text": 123}),
             event(),
         ]
         with patch.object(
@@ -350,7 +350,12 @@ def test_coverage_and_track_filters_with_unbounded_events(api) -> None:
 
 def test_storage_errors_preserve_valid_batch_members(api) -> None:
     for text in ("bad\x00", "bad\ud800"):
-        body = [event(), event(payload={"text": text}), event(id=123), event()]
+        body = [
+            event(),
+            event(payload={"text": text}),
+            event(payload={"text": 123}),
+            event(),
+        ]
         response = api.client.post(
             api.events,
             content=json.dumps(body),
@@ -366,3 +371,25 @@ def test_storage_errors_preserve_valid_batch_members(api) -> None:
             201,
         ]
     assert len(api.send("GET", api.events).json()) == 4
+
+
+def test_malformed_event_envelopes_fail_before_writes(api) -> None:
+    malformed = [
+        None,
+        {},
+        {"payload": {}},
+        {"timerange": "[0:0_1:0)"},
+        event(id=123),
+        event(id="bad\x00id"),
+        event(timerange=None),
+        42,
+    ]
+    for body in malformed:
+        for request_body in [body, [event(), body]]:
+            response = api.client.post(
+                api.events,
+                content=json.dumps(request_body),
+                headers={"Content-Type": "application/json"},
+            )
+            assert response.status_code == 400, response.text
+            assert api.send("GET", api.events).json() == []
