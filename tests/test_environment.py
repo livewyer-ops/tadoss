@@ -197,6 +197,8 @@ def credentials_task(tmp_path):
                     }
                 ),
                 "TEST_SECRET_CODE": str(code),
+                # Exercise shell output without Task's GitHub stdout annotations.
+                "GITHUB_ACTIONS": "false",
             },
             capture_output=True,
             text=True,
