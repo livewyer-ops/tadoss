@@ -12,6 +12,7 @@ vars:
   IMAGE_TAG: '{{.IMAGE_TAG | default (printf "dev-%s" .BUILD_ID)}}'
 env:
   AQUA_CONFIG: '{{.ROOT_DIR}}/aqua.yml'
+  HELM_DATA_HOME: '{{.ROOT_DIR}}/.local/helm'
   HELM_PLUGINS: '{{.ROOT_DIR}}/.local/helm/plugins'
   PATH: '{{.HOME}}/.local/share/aquaproj-aqua/bin:{{.PATH}}'
 includes:

@@ -45,7 +45,7 @@
         "/^\\.tasks/dev\\.yaml$/"
       ],
       "matchStrings": [
-        "--version (?<currentValue>v[0-9.]+)"
+        "HELM_DIFF_VERSION: \"(?<currentValue>v[0-9.]+)\""
       ],
       "depNameTemplate": "databus23/helm-diff",
       "datasourceTemplate": "github-releases"

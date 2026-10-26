@@ -1,10 +1,33 @@
 version: '3'
 tasks:
   helm-diff:
-    status: ["helm plugin list | grep -qE '^diff[[:space:]]+3.15.12' "]
+    desc: Install the pinned Helm diff plugin with signature verification
+    vars:
+      HELM_DIFF_VERSION: "v3.15.12"
+    preconditions:
+      - sh: command -v helm && command -v curl && command -v gpg
+        msg: Helm, curl and GnuPG are required
+    status: ['test "v$(helm diff version 2>/dev/null)" = "{{.HELM_DIFF_VERSION}}"']
     cmds:
-      - mkdir -p .local/helm/plugins
-      - helm plugin install https://github.com/databus23/helm-diff --version v3.15.12
+      - |
+        case "$(uname -s)" in
+          Linux) platform=linux ;;
+          Darwin) platform=macos ;;
+          *) echo "Unsupported Helm diff platform" >&2; exit 1 ;;
+        esac
+        case "$(uname -m)" in
+          x86_64) architecture=amd64 ;;
+          arm64|aarch64) architecture=arm64 ;;
+          *) echo "Unsupported Helm diff architecture" >&2; exit 1 ;;
+        esac
+        work="$(mktemp -d)"
+        trap 'rm -rf "$work"' EXIT
+        release="https://github.com/databus23/helm-diff/releases/download/{{.HELM_DIFF_VERSION}}"
+        curl --fail --silent --show-error --location "$release/pubkey.asc" -o "$work/pubkey.asc"
+        fingerprint="$(gpg --batch --show-keys --with-colons "$work/pubkey.asc" | awk -F: '$1 == "fpr" { print $10; exit }')"
+        test "$fingerprint" = "C5645EF47482257A1F806D2BEA17A2A206AFF8CD"
+        gpg --batch --dearmor --output "$work/keyring.gpg" "$work/pubkey.asc"
+        helm plugin install "$release/helm-diff-$platform-$architecture.tgz" --verify --keyring "$work/keyring.gpg"
   db:
     desc: Start the local PostgreSQL test database
     cmds: [docker compose up -d --wait db]
