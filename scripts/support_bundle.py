@@ -21,6 +21,7 @@ STATUS_FIELDS = (
     "availableReplicas",
     "workerReadyReplicas",
     "currentVersion",
+    "pendingVersion",
     "schemaJob",
     "appliedDefaultsRevision",
 )

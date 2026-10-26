@@ -83,3 +83,6 @@ strict = [
     "app/tadoss/application/events.py",
     "app/tadoss/api/dependencies.py",
 ]
+
+[tool.pytest.ini_options]
+markers = ["tadoss_security: TADOSS authentication or security policy"]

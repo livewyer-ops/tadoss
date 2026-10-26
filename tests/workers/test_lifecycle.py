@@ -2,7 +2,7 @@ from unittest.mock import patch
 
 from tadoss import worker
 from tadoss.adapters import postgres as store
-from tadoss.application import background
+from tadoss.adapters import queues
 from tadoss.settings import Settings
 
 
@@ -57,10 +57,10 @@ def test_retention_is_bounded_and_preserves_active_and_retained_jobs(database):
                     (identifier, status, expiry),
                 )
         settings = Settings(worker_queue_retention_seconds=0)
-        job = background.claim(pool, settings)
+        job = queues.claim(pool, settings)
         assert job[0] == "active"
         with store.transaction(pool, write=True) as db:
-            assert background.finish(db, job[0], job[5], "done", settings)
+            assert queues.finish(db, job[0], job[5], "done", settings)
         worker.maintain(pool)
         with store.transaction(pool) as db:
             assert db.execute("SELECT count(*) FROM jobs").fetchone()[0] == 5

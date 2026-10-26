@@ -26,11 +26,26 @@ def check():
     catalogue = json.loads(
         (ROOT / "operator/internal/releases/catalogue.json").read_text()
     )
-    if (
-        len(catalogue) != 1
-        or catalogue[0]["version"] != RELEASE["version"]
-        or catalogue[0]["schemaTarget"] != RELEASE["schemaTarget"]
-    ):
+    versions = {entry["version"] for entry in catalogue}
+    if len(versions) != len(catalogue):
+        raise ValueError("Operator catalogue contains duplicate versions")
+    for entry in catalogue:
+        predecessors = entry.get("upgradeFrom")
+        if (
+            not isinstance(predecessors, list)
+            or any(
+                not isinstance(value, str)
+                or value not in versions
+                or value == entry["version"]
+                for value in predecessors
+            )
+            or len(set(predecessors)) != len(predecessors)
+        ):
+            raise ValueError("Operator catalogue has invalid upgradeFrom")
+    current = next(
+        (entry for entry in catalogue if entry["version"] == RELEASE["version"]), None
+    )
+    if current is None or current["schemaTarget"] != RELEASE["schemaTarget"]:
         raise ValueError("Operator catalogue differs from current release")
     platform = (ROOT / "deploy/platform/helmfile.yaml.gotmpl").read_text()
     for chart, version in RELEASE["platformCharts"].items():
@@ -44,6 +59,8 @@ def check():
         if not re.search(pattern, platform):
             raise ValueError("Platform chart differs from release metadata: " + chart)
 
+    return catalogue
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -52,7 +69,7 @@ def main():
     parser.add_argument("--operator-image")
     parser.add_argument("--output", type=Path, default=ROOT / "dist")
     args = parser.parse_args()
-    check()
+    catalogue = check()
     if args.command == "check":
         print("Release metadata is consistent")
         return
@@ -63,13 +80,9 @@ def main():
     ):
         if not image or not re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", image):
             parser.error("Release images must use immutable sha256 digests")
-    catalogue = [
-        {
-            "version": RELEASE["version"],
-            "apiImage": args.runtime_image,
-            "schemaTarget": RELEASE["schemaTarget"],
-        }
-    ]
+    for entry in catalogue:
+        if entry["version"] == RELEASE["version"]:
+            entry["apiImage"] = args.runtime_image
     if args.command == "catalogue":
         (ROOT / "operator/internal/releases/catalogue.json").write_text(
             json.dumps(catalogue, indent=2) + "\n"
@@ -107,6 +120,11 @@ def main():
             {
                 "version": RELEASE["version"],
                 "schemaTarget": RELEASE["schemaTarget"],
+                "upgradeFrom": next(
+                    entry["upgradeFrom"]
+                    for entry in catalogue
+                    if entry["version"] == RELEASE["version"]
+                ),
                 "platformCharts": RELEASE["platformCharts"],
                 "qualifiedKubernetesImage": yaml.safe_load(
                     (ROOT / "deploy/kind/single-node.yaml").read_text()

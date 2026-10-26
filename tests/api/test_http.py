@@ -306,3 +306,13 @@ def test_commit_failure_rolls_back_mutation_and_notification(api) -> None:
     assert api.send("GET", f"/tracks/{TRACK_ID}").json() == before
     with psycopg.connect(api.database) as connection:
         assert connection.execute("SELECT count(*) FROM jobs").fetchone() == (0,)
+
+
+@pytest.mark.parametrize("reverse", ["true", "false"])
+def test_deletion_get_and_head_report_order(api, reverse):
+    get = api.send("GET", "/track-delete-requests", params={"reverse_order": reverse})
+    head = api.send("HEAD", "/track-delete-requests", params={"reverse_order": reverse})
+    assert head.content == b""
+    for response in (get, head):
+        assert response.headers["X-Paging-Reverse-Order"] == reverse
+        assert response.headers["X-Paging-Count"] == "0"

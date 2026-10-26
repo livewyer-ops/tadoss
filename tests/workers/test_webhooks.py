@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 from tadoss import worker
 from tadoss.adapters import postgres as store
+from tadoss.adapters import queues
 from tadoss.application import background
 from tadoss.auth import Identity
 from tadoss.domain.validation import SPEC, contract_schema, validate
@@ -36,7 +37,7 @@ def test_webhook_lifecycle_delivery_and_secret(api) -> None:
         "PUT",
         "/service/webhooks/" + webhook["id"],
         {**webhook, "status": "disabled"},
-        status=204,
+        status=200,
     )
     api.send("POST", api.events, test_api.event())
     assert not worker.run_once(api.app.state.pool, api.app.state.settings, receiver)
@@ -51,12 +52,12 @@ def test_webhook_owner_and_stale_revision(api) -> None:
             background.webhook_get(db, webhook["id"], Identity("other"))
         assert error.value.status == 404
     api.send("POST", api.events, test_api.event())
-    job = background.claim(api.app.state.pool, api.app.state.settings)
+    job = queues.claim(api.app.state.pool, api.app.state.settings)
     api.send(
         "PUT",
         "/service/webhooks/" + webhook["id"],
         {**webhook, "status": "disabled"},
-        status=204,
+        status=200,
     )
     with patch("tadoss.worker.deliver") as deliver:
         worker.process_webhook(api.app.state.pool, job, api.app.state.settings, deliver)
@@ -67,9 +68,9 @@ def test_expired_delete_claim_rolls_back_mutation(api) -> None:
     api.app.state.settings = replace(api.app.state.settings, delete_batch_size=1)
     api.send("POST", api.events, [test_api.event(), test_api.event()])
     api.send("DELETE", api.events, status=202)
-    job = background.claim(api.app.state.pool, api.app.state.settings)
+    job = queues.claim(api.app.state.pool, api.app.state.settings)
     with (
-        patch("tadoss.application.background.finish", return_value=False),
+        patch("tadoss.adapters.queues.finish", return_value=False),
         pytest.raises(RuntimeError),
     ):
         background.process_delete(api.app.state.pool, job, api.app.state.settings)
@@ -144,7 +145,7 @@ def test_webhook_failures_finish_subscription_and_allow_get_put_reenable(
             current = api.send("GET", path).json()
             assert current["status"] == "error"
             assert "secret bytes" not in str(current)
-            api.send("PUT", path, {**current, "status": "created"}, status=204)
+            api.send("PUT", path, {**current, "status": "created"}, status=200)
             assert "error" not in api.send("GET", path).json()
             api.send("DELETE", path, status=204)
 
@@ -163,18 +164,20 @@ def test_webhook_revision_preserves_metadata_credentials_and_membership_order(
         "events": list(reversed(webhook["events"])),
         "track_ids": list(reversed(webhook["track_ids"])),
     }
-    api.send("PUT", path, changed, status=204)
+    updated = api.send("PUT", path, changed, status=200).json()
+    assert updated["tags"] == {"label": ["new"]}
+    assert "api_key_value" not in updated
     sender = Mock(return_value=204)
     worker.run_once(api.app.state.pool, api.app.state.settings, sender)
     assert sender.call_args.args[2:4] == ("X-New", "rotated")
     assert api.send("GET", path).json()["tags"] == {"label": ["new"]}
     api.send("POST", api.events, test_api.event())
-    api.send("PUT", path, changed, status=204)
+    api.send("PUT", path, changed, status=200)
     worker.run_once(api.app.state.pool, api.app.state.settings, sender)
     assert sender.call_count == 2
     api.send("POST", api.events, test_api.event())
-    api.send("PUT", path, {**changed, "status": "disabled"}, status=204)
-    api.send("PUT", path, changed, status=204)
+    api.send("PUT", path, {**changed, "status": "disabled"}, status=200)
+    api.send("PUT", path, changed, status=200)
     worker.run_once(api.app.state.pool, api.app.state.settings, sender)
     assert sender.call_count == 2
 
@@ -195,7 +198,7 @@ def test_webhook_completion_preserves_edits_and_resets_rotated_budget(api) -> No
                 "api_key_name": "X-New",
                 "api_key_value": "new-secret",
             },
-            status=204,
+            status=200,
         )
         return 401
 
@@ -225,7 +228,7 @@ def test_webhook_filter_changes_invalidate_old_deliveries(api, subtests) -> None
             webhook = api.register()
             path = "/service/webhooks/" + webhook["id"]
             api.send("POST", api.events, test_api.event())
-            api.send("PUT", path, {**webhook, **change}, status=204)
+            api.send("PUT", path, {**webhook, **change}, status=200)
             sender = Mock(return_value=204)
             worker.run_once(api.app.state.pool, api.app.state.settings, sender)
             sender.assert_not_called()

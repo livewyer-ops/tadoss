@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	tadossv1 "github.com/livewyer-ops/tadoss/operator/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -27,6 +29,9 @@ func (r *TadossReconciler) status(ctx context.Context, t *tadossv1.Tadoss, phase
 	if err := r.Get(ctx, client.ObjectKeyFromObject(t), live); err != nil {
 		return err
 	}
+	if live.Generation != t.Generation {
+		return apierrors.NewConflict(tadossv1.GroupVersion.WithResource("tadosses").GroupResource(), t.Name, fmt.Errorf("spec changed during reconciliation"))
+	}
 	before := live.DeepCopy()
 	live.Status = t.Status
 	live.Status.Phase = phase
@@ -40,7 +45,7 @@ func (r *TadossReconciler) status(ctx context.Context, t *tadossv1.Tadoss, phase
 	if reflect.DeepEqual(before.Status, live.Status) {
 		return nil
 	}
-	if err := r.Status().Patch(ctx, live, client.MergeFrom(before)); err != nil {
+	if err := r.Status().Patch(ctx, live, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
 		return err
 	}
 	_, _, changed := operatorstatus.ChangedConditionReason(before.Status.Conditions, live.Status.Conditions, tadossv1.ConditionReady)

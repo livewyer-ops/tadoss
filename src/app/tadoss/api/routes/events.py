@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 
+from tadoss import metrics
 from tadoss.adapters import postgres as store
 from tadoss.api.dependencies import Body, Database, Query
 from tadoss.api.http import deletion_response, event_page
@@ -19,10 +20,13 @@ def list_events(
 
 
 @router.post("/tracks/{track_id}/events")
-def write_events(track_id: str, db: Database, body: Body) -> Response:
-    return JSONResponse(
-        events.write_events(db, store.get(db, "tracks", track_id), body)
-    )
+def write_events(request: Request, track_id: str, db: Database, body: Body) -> Response:
+    metrics.BATCH.observe(len(body) if isinstance(body, list) else 1)
+    result = events.write_events(db, store.get(db, "tracks", track_id), body)
+    request.state.event_results = [
+        row["http_status_code"] for row in result["responses"]
+    ]
+    return JSONResponse(result)
 
 
 @router.delete("/tracks/{track_id}/events")

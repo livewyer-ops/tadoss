@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Qualify authenticated event workflows, pagination and HEAD responses through verified HTTPS ingress; separate contract and semantic test reports and include authentication in fast checks.
+- Return the BBC-required updated webhook body with HTTP 200 after PUT, and include deletion-list reverse-order headers on GET and HEAD.
+- Add committed event outcomes, batch sizes and webhook attempt timing; consolidate PostgreSQL queue persistence while retaining existing leases and transaction boundaries.
+- Record pending release targets, reject unsupported upgrades and preserve historical entries during release catalogue publication.
 - Reject API database operations while the schema is incompatible or uninitialised. Clarify database reset and recovery requirements before the first public release.
 - Reuse TAMOSS operator implementations for managed apply, namespace scope, event filtering, CNPG rollouts and condition handling; index Secret and ConfigMap references for watch dispatch.
 - Bound API database admission and reduce event-batch, metadata-update and webhook fanout work; use existing indexes for collection filters.

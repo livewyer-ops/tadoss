@@ -12,7 +12,7 @@ spec:
       containers:
       - name: check
         image: ($values.apiImage)
-        command: [python, /check/checks.py]
+        command: [python, /check/checks.py, --database-only]
         env:
         - name: TADOSS_DATABASE
           valueFrom:
@@ -21,11 +21,6 @@ spec:
               key: uri
         - name: TADOSS_DATABASE_SSL_ROOT_CERT
           value: /database-ca/ca.crt
-        - name: TADOSS_API_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: tadoss-api-token
-              key: token
         volumeMounts:
         - name: check
           mountPath: /check

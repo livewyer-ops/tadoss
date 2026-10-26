@@ -63,7 +63,7 @@ func Resolve(t *tadossv1.Tadoss, installation Installation) error {
 	if installation.Error != "" {
 		return fmt.Errorf("InvalidInstallationDefaults: %s", installation.Error)
 	}
-	release, err := releases.Resolve(t.Spec.Version)
+	release, err := releases.Resolve(t.Spec.Version, t.Status.CurrentVersion, t.Status.PendingVersion)
 	if err != nil {
 		return err
 	}

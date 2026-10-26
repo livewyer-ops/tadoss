@@ -78,7 +78,7 @@ JWT verification requires `exp`, `sub`, `iss` and `aud`; the nonempty `sub` is t
 | `paused`, `schemaRetryNonce` | false / empty |
 | `deletionPolicy`, `deletionProtection` | `Retain` / true |
 
-`status.resolved` records the effective profile, images, schema target and defaults revision. `currentVersion` and `appliedDefaultsRevision` advance after the rollout. `observedGeneration` advances when that generation is ready or has failed; inspect `phase` and conditions as well. `endpoint`, `databaseSecret`, `tokenSecret` and `schemaJob` identify generated resources without exposing credentials.
+`status.resolved` records the effective profile, images, schema target and defaults revision. `pendingVersion` records the selected release before rollout and survives failures and operator restarts. `currentVersion` and `appliedDefaultsRevision` advance after the rollout, which clears `pendingVersion`. `observedGeneration` advances when that generation is ready or has failed; inspect `phase` and conditions as well. `endpoint`, `databaseSecret`, `tokenSecret` and `schemaJob` identify generated resources without exposing credentials.
 
 | Condition | Meaning and useful reasons |
 | --- | --- |

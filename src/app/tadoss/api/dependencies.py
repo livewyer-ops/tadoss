@@ -8,6 +8,7 @@ import anyio
 from fastapi import Depends, Request
 from psycopg_pool import PoolTimeout
 
+from tadoss import metrics
 from tadoss.adapters import postgres as store
 from tadoss.application import background
 from tadoss.auth import Identity
@@ -93,6 +94,10 @@ def database(
         if write and "track_id" in parameters:
             background.ensure_track_available(db, parameters["track_id"])
         yield db
+    # The connection context commits before successful writes are counted.
+    outcomes = {201: "created", 200: "updated"}
+    for status in getattr(request.state, "event_results", []):
+        metrics.EVENTS.labels(outcomes.get(status, "rejected")).inc()
 
 
 # Commit before sending the response, including failures raised by commit itself.

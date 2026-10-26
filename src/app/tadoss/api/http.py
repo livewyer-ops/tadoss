@@ -169,6 +169,10 @@ def paged(
     limit = min(options.get("limit", 100), 1000)
     page = records[:limit]
     headers = {"X-Paging-Limit": str(limit), "X-Paging-Count": str(len(page))}
+    if deletion:
+        headers["X-Paging-Reverse-Order"] = str(
+            options.get("reverse_order", False)
+        ).lower()
     if len(records) > limit:
         key = (
             [

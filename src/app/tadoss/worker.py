@@ -12,6 +12,7 @@ from psycopg.types.json import Jsonb
 
 from tadoss import metrics
 from tadoss.adapters import postgres as store
+from tadoss.adapters import queues
 from tadoss.adapters.webhook_delivery import deliver
 from tadoss.application import background
 from tadoss.domain.types import Document, Job
@@ -30,13 +31,7 @@ def renew_claim(pool: store.Pool, job: Job, settings: Settings) -> Iterator[None
         while not stopped.wait(settings.worker_lease_seconds / 3):
             try:
                 with store.transaction(pool, write=True) as db:
-                    row = db.execute(
-                        "UPDATE jobs SET lease_until=now()+make_interval(secs => "
-                        "%s) WHERE id=%s AND claim=%s AND lease_until>now() "
-                        "RETURNING id",
-                        (settings.worker_lease_seconds, job[0], job[5]),
-                    ).fetchone()
-                    if not row:
+                    if not queues.renew(db, job, settings.worker_lease_seconds):
                         return
             except Exception as exc:
                 log_failure("Could not renew worker claim", exc, job)
@@ -99,7 +94,7 @@ def complete_webhook(
             else "created"
         )
         if (
-            background.finish(
+            queues.finish(
                 db,
                 identifier,
                 token,
@@ -144,19 +139,28 @@ def process_webhook(
     document, secret, _ = row
     credentials = (document.get("api_key_name", ""), secret)
     error, terminal = None, False
+    outcome = "success"
+    started = time.perf_counter()
     try:
         with renew_claim(pool, job, settings):
             status = sender(document["url"], payload["body"], *credentials, settings)
         if not 200 <= status < 300:
+            outcome = "http_error"
             error = APIError(502, f"Webhook receiver returned HTTP {status}").body
     except APIError:
+        outcome = "rejected"
         error, terminal = APIError(400, "Webhook destination rejected").body, True
     except (OSError, ValueError, http.client.HTTPException) as exc:
+        outcome = "transport_error"
         log_failure("Webhook connection failed", exc, job)
         error = APIError(502, "Webhook connection failed").body
     except Exception as exc:
+        outcome = "internal_error"
         log_failure("Webhook delivery failed", exc, job)
         error = APIError(500, "Webhook delivery failed").body
+    finally:
+        metrics.WEBHOOK_ATTEMPTS.labels(outcome).inc()
+        metrics.WEBHOOK_DURATION.labels(outcome).observe(time.perf_counter() - started)
     complete_webhook(
         pool, job, settings, error, terminal=terminal, credentials=credentials
     )
@@ -167,7 +171,7 @@ def run_once(
     settings: Settings,
     sender: Callable[[str, Document, str, str, Settings], int] = deliver,
 ) -> bool:
-    job = background.claim(pool, settings)
+    job = queues.claim(pool, settings)
     if job is None:
         return False
     try:
@@ -184,27 +188,18 @@ def run_once(
         else:
             with store.transaction(pool, write=True) as db:
                 state = "error" if job[4] >= settings.delete_max_attempts else "created"
-                background.finish(db, job[0], job[5], state, settings, error, delay=30)
+                queues.finish(db, job[0], job[5], state, settings, error, delay=30)
         metrics.WORK.labels(job[1], "failed").inc()
     return True
 
 
 def maintain(pool: store.Pool) -> None:
     with store.transaction(pool, write=True) as db:
-        # Purge bounded batches so retention cannot monopolise the database.
-        db.execute(
-            "DELETE FROM jobs WHERE id IN (SELECT id FROM jobs WHERE expiry<now()"
-            " AND status IN ('done','error') LIMIT 1000)"
-        )
-        for kind in ("delete", "webhook"):
-            count, age = db.execute(
-                "SELECT count(*), COALESCE(extract(epoch FROM "
-                "now()-min(created)),0) FROM jobs WHERE kind=%s AND status IN "
-                "('created','started')",
-                (kind,),
-            ).fetchall()[0]
-            metrics.QUEUE.labels(kind).set(count)
-            metrics.AGE.labels(kind).set(float(age))
+        active = {kind: (count, age) for kind, count, age in queues.maintain(db)}
+    for kind in ("delete", "webhook"):
+        count, age = active.get(kind, (0, 0.0))
+        metrics.QUEUE.labels(kind).set(count)
+        metrics.AGE.labels(kind).set(age)
 
 
 def main(settings: Settings) -> None:

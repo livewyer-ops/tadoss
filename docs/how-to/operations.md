@@ -13,6 +13,14 @@ kubectl -n tads patch tadoss archive --type=merge -p '{"spec":{"paused":true}}'
 
 CNPG `instances` is independent of API/worker replicas. Multi-server defaults need sufficient nodes and storage. Profiles add topology preferences and disruption budgets; a single-node deployment cannot provide node failure tolerance. Explicit `minAvailable` overrides the default budget.
 
+## Select a release
+
+Set `spec.version` to an exact entry in the installed operator's catalogue. Each entry's `upgradeFrom` lists the installed releases permitted to move to it; an empty list permits fresh installation and reconciliation of that same release. Unsupported transitions report `UnsupportedUpgrade` before changing managed resources.
+
+`status.pendingVersion` records the target before installation or upgrade begins. The operator retains it across failures and restarts, and rejects a different target with `UpgradeInProgress`. Restore `spec.version` to that pending target, correct the reported failure and let reconciliation finish. `status.currentVersion` advances and `pendingVersion` clears only after schema migration and both workload rollouts succeed. Pausing reconciliation leaves this target recorded.
+
+An operator restart resumes the selected release; it does not roll back schema changes. Use a maintenance window for incompatible schema changes, and recover with a matching database backup when required. The first supported cross-release upgrade must be rehearsed with populated data and outstanding jobs before publication.
+
 ## Retry a failed schema Job
 
 Inspect `status.schemaJob` and its logs, fix the reported connection, schema or resource problem, then change `spec.schemaRetryNonce` to a new value. The operator creates a new immutable Job and waits for it before updating workloads. Database credentials or CA object revisions also create a new Job. Migration is idempotent for the selected schema target.

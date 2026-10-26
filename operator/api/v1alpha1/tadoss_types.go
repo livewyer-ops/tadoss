@@ -216,7 +216,9 @@ type ResolvedStatus struct {
 
 // TadossStatus reports the observed instance; it never contains credential values.
 type TadossStatus struct {
-	CurrentVersion          string         `json:"currentVersion,omitempty"`
+	CurrentVersion string `json:"currentVersion,omitempty"`
+	// PendingVersion is persisted before release changes start and cleared after readiness.
+	PendingVersion          string         `json:"pendingVersion,omitempty"`
 	AppliedDefaultsRevision string         `json:"appliedDefaultsRevision,omitempty"`
 	Resolved                ResolvedStatus `json:"resolved,omitempty"`
 	WorkerReadyReplicas     int32          `json:"workerReadyReplicas,omitempty"`

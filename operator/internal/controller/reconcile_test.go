@@ -138,7 +138,7 @@ func TestReconcileManagedInstance(t *testing.T) {
 	if err := live.Get(ctx, client.ObjectKeyFromObject(cr), cr); err != nil {
 		t.Fatal(err)
 	}
-	if cr.Status.ObservedGeneration != 0 || cr.Status.Phase != tadossv1.PhaseProgressing {
+	if cr.Status.ObservedGeneration != 0 || cr.Status.Phase != tadossv1.PhaseProgressing || cr.Status.PendingVersion != cr.Spec.Version || cr.Status.CurrentVersion != "" {
 		t.Fatalf("progressing instance must not report its generation: %+v", cr.Status)
 	}
 	setStatus(t, deployment, func() {
@@ -152,7 +152,7 @@ func TestReconcileManagedInstance(t *testing.T) {
 	eventually(t, "ready status", func() bool {
 		return live.Get(ctx, client.ObjectKeyFromObject(cr), cr) == nil && cr.Status.Phase == tadossv1.PhaseReady
 	})
-	if cr.Status.ObservedGeneration != cr.Generation || cr.Status.Endpoint != "http://demo-api."+namespace+".svc:8000" || cr.Status.TokenSecret != "demo-api-token" {
+	if cr.Status.PendingVersion != "" || cr.Status.CurrentVersion != cr.Spec.Version || cr.Status.ObservedGeneration != cr.Generation || cr.Status.Endpoint != "http://demo-api."+namespace+".svc:8000" || cr.Status.TokenSecret != "demo-api-token" {
 		t.Fatalf("unexpected ready status %+v", cr.Status)
 	}
 	if err := live.Get(ctx, client.ObjectKey{Namespace: namespace, Name: "demo-api"}, &corev1.Service{}); err != nil {

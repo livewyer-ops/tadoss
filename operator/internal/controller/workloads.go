@@ -52,6 +52,7 @@ func (r *TadossReconciler) reconcileWorkloads(ctx context.Context, t *tadossv1.T
 		return r.pending(ctx, t, "RolloutPending", "Waiting for API and worker rollouts")
 	}
 	t.Status.CurrentVersion = t.Spec.Version
+	t.Status.PendingVersion = ""
 	t.Status.AppliedDefaultsRevision = t.Status.Resolved.DefaultsRevision
 	if err := r.status(ctx, t, tadossv1.PhaseReady, "Available", "Database schema and API are ready", true); err != nil {
 		return ctrl.Result{}, err

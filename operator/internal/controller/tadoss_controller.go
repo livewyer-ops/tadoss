@@ -2,11 +2,13 @@ package controller
 
 import (
 	"context"
+	"errors"
 
 	operatorstatus "github.com/livewyer-ops/tadoss/operator/internal/status"
 
 	tadossv1 "github.com/livewyer-ops/tadoss/operator/api/v1alpha1"
 	"github.com/livewyer-ops/tadoss/operator/internal/controller/defaults"
+	"github.com/livewyer-ops/tadoss/operator/internal/releases"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/events"
@@ -67,7 +69,16 @@ func (r *TadossReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, r.Patch(ctx, t, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{}))
 	}
 	if err := defaults.Resolve(t, r.Defaults); err != nil {
-		return ctrl.Result{}, r.status(ctx, t, tadossv1.PhaseError, "ConfigurationInvalid", err.Error(), false)
+		reason := "ConfigurationInvalid"
+		var selection *releases.SelectionError
+		if errors.As(err, &selection) {
+			reason = selection.Reason
+		}
+		return ctrl.Result{}, r.status(ctx, t, tadossv1.PhaseError, reason, err.Error(), false)
+	}
+	if t.Status.CurrentVersion != t.Spec.Version && t.Status.PendingVersion == "" {
+		t.Status.PendingVersion = t.Spec.Version
+		return r.pending(ctx, t, "ReleasePending", "Selected release recorded before changing managed resources")
 	}
 	result, err := r.reconcile(ctx, t)
 	if err != nil {

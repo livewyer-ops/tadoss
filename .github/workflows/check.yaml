@@ -32,6 +32,7 @@ jobs:
           key: go-${{ runner.os }}-${{ hashFiles('operator/go.sum', 'operator/Makefile') }}
       - run: task setup
       - run: task check
+      - run: task test:tads
       - run: task security:audit
       - name: Generated files are current
         run: |
@@ -44,6 +45,7 @@ jobs:
           name: test-reports
           path: |
             reports/python*.xml
+            reports/tads-*.xml
             reports/go-coverage.*
           if-no-files-found: warn
   kind:

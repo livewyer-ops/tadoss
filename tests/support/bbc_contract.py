@@ -57,3 +57,13 @@ def response_contract(path: str, method: str, status: int) -> dict:
             .contents
         )
     return response
+
+
+def header_validator(header: dict, path: str, method: str, status: int, name: str):
+    """Resolve header schemas relative to the original BBC document."""
+    reference = header.get("$ref")
+    if reference is None:
+        escaped = path.replace("~", "~0").replace("/", "~1")
+        reference = f"#/paths/{escaped}/{method}/responses/{status}/headers/{name}"
+    definition = bbc_registry().resolver(BBC_API_SPEC_PATH.as_uri()).lookup(reference)
+    return definition.contents["schema"], bbc_validator(reference + "/schema")

@@ -9,6 +9,18 @@ TADOSS_DEV=true uv run --project src tadoss serve
 
 Open `http://127.0.0.1:8000/docs`. Start the worker in another terminal with `TADOSS_DEV=true uv run --project src tadoss worker` to process notifications and deferred deletions.
 
+## Create a transcript
+
+With the API running, execute the [transcript example](../../examples/transcript.py):
+
+```sh
+uv run --project src python examples/transcript.py
+```
+
+It creates a payload schema and a track, writes transcript events, then prints events overlapping the first two seconds. It leaves the records available for inspection. Set `TADOSS_URL` and `TADOSS_API_TOKEN` when using an authenticated installation.
+
+The track's `timeline_reference.entity_id` identifies the media timeline; it does not import media or contact TAMOSS. Set `TAMS_ENTITY` to the `tams://<host>/sources/<source-id>` reference for your TAMOSS Source before running the example. TADOSS event ranges must use that Source's timeline. See the pinned BBC [TADS and TAMS application note](../../src/vendor/bbc-tads/docs/appnotes/0001-using-tads-with-tams.md).
+
 ## Recreate a disposable development database
 
 Compose preserves its database volume between restarts. If the [changelog](../../CHANGELOG.md) requires a fresh database, the following commands delete all data in this repository's Compose database and initialise it again:

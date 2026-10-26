@@ -17,3 +17,18 @@ The bundle allowlists resource names and selected status/condition fields. It ex
 ## Slow namespace deletion
 
 CNPG database pods have a long shutdown grace period. Kubernetes can defer namespace cleanup based on that period even when the pods finish sooner. For disposable environments, delete the instance and wait for its database pods to disappear before deleting the namespace. With `deletionPolicy: Retain`, the database remains until you explicitly remove it; do that only when its data is no longer needed.
+
+## Event and webhook metrics
+
+An HTTP 200 event-batch response can contain rejected records. `tadoss_events_total` counts each result from batches whose database transaction committed, with `outcome` set to `created`, `updated` or `rejected`. Failed transactions contribute no event outcomes. `tadoss_event_batch_size` records submitted batch sizes after request admission.
+
+Use these PromQL queries with the API and worker metrics already scraped by your monitoring system:
+
+```promql
+sum by (outcome) (rate(tadoss_events_total[5m]))
+sum(rate(tadoss_event_batch_size_sum[5m])) / sum(rate(tadoss_event_batch_size_count[5m]))
+sum by (outcome) (rate(tadoss_webhook_delivery_total[5m]))
+histogram_quantile(0.95, sum by (le) (rate(tadoss_webhook_delivery_seconds_bucket[5m])))
+```
+
+Webhook outcomes are `success`, `http_error`, `transport_error`, `rejected` or `internal_error`. Each retry is a separate attempt. Disabled or superseded subscriptions skipped before delivery add no attempt. A successful delivery records the receiver's response; lease expiry can still prevent completion from being stored, so inspect queue age and retry activity together. These process-local metrics are diagnostic counters, not an audit ledger. They contain no resource IDs or destination URLs.

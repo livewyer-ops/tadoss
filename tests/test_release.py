@@ -28,6 +28,42 @@ def test_release_metadata_matches_runtime():
     release.check()
 
 
+def test_catalogue_publication_preserves_previous_releases(tmp_path, monkeypatch):
+    for relative in (
+        "operator/internal/releases/catalogue.json",
+        "deploy/platform/helmfile.yaml.gotmpl",
+    ):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / relative, destination)
+    path = tmp_path / "operator/internal/releases/catalogue.json"
+    entries = json.loads(path.read_text())
+    old = {
+        **entries[0],
+        "version": "previous",
+        "apiImage": "example/api@sha256:" + "b" * 64,
+    }
+    entries[0]["upgradeFrom"] = [old["version"]]
+    entries.insert(0, old)
+    path.write_text(json.dumps(entries))
+    monkeypatch.setattr(release, "ROOT", tmp_path)
+    image = "example/api@sha256:" + "a" * 64
+    monkeypatch.setattr("sys.argv", ["release", "catalogue", "--runtime-image", image])
+    release.main()
+    written = json.loads(path.read_text())
+    assert written[0] == old
+    assert written[1] == {**entries[1], "apiImage": image}
+    for predecessors in (
+        ["unknown"],
+        [written[1]["version"]],
+        ["previous", "previous"],
+    ):
+        written[1]["upgradeFrom"] = predecessors
+        path.write_text(json.dumps(written))
+        with pytest.raises(ValueError, match="upgradeFrom"):
+            release.check()
+
+
 @pytest.mark.parametrize(
     "tags,code,success",
     [("v0.1.0\n", 0, True), ("v0.1.0\nv0.2.0\n", 0, False), ("", 1, False)],
@@ -115,6 +151,7 @@ def test_metadata_binds_qualified_images(tmp_path, monkeypatch):
                     "version": release.RELEASE["version"],
                     "apiImage": runtime,
                     "schemaTarget": release.RELEASE["schemaTarget"],
+                    "upgradeFrom": [],
                 }
             ]
         )

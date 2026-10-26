@@ -1,6 +1,6 @@
 # Releasing
 
-Edit `src/app/tadoss/release.json` and the operator catalogue together. Runtime package version is read from the release file. Regenerate and review the contract when changing its pinned upstream revision. Run `task release:check`, `task check`, `task security:audit` and deployed qualification before tagging.
+Edit `src/app/tadoss/release.json` and the operator catalogue together. Retain supported catalogue entries with their original immutable image references. Set the new entry's `upgradeFrom` to the predecessor releases qualified for that transition; the first release uses an empty list. Artifact generation updates only the current entry's runtime digest and preserves the other entries. Runtime package version is read from the release file. Regenerate and review the contract when changing its pinned upstream revision. Run `task release:check`, `task check`, `task security:audit` and deployed qualification before tagging.
 
 The release workflow checks the tag, builds and scans the multi-architecture runtime image, writes its exact digest into the operator catalogue, then builds the operator image. It qualifies those digest references, assembles install YAML and compatibility metadata, and signs the images and checksum file. SBOM and provenance are attached to image builds. Release assets include the catalogue, install manifest, compatibility matrix and checksums.
 

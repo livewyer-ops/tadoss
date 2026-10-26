@@ -9824,6 +9824,10 @@ spec:
               observedGeneration:
                 format: int64
                 type: integer
+              pendingVersion:
+                description: PendingVersion is persisted before release changes start
+                  and cleared after readiness.
+                type: string
               phase:
                 enum:
                 - Progressing

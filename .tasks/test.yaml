@@ -2,19 +2,28 @@ version: '3'
 tasks:
   fast:
     desc: Run checks that do not require PostgreSQL or Kubernetes
-    cmds: ["uv run --project src --frozen pytest -q tests/test_settings.py tests/test_environment.py tests/test_repository.py tests/test_documented_task_commands.py tests/test_chainsaw_native_policy.py tests/test_chainsaw_fixture_programmes.py tests/workers/test_worker_http_health.py tests/test_vendor_spec.py tests/test_support_bundle.py tests/test_release.py tests/test_webhook_delivery.py"]
+    cmds: ["uv run --project src --frozen pytest -c src/pyproject.toml -q tests/test_settings.py tests/test_environment.py tests/test_repository.py tests/test_contract.py tests/test_auth.py tests/test_documented_task_commands.py tests/test_chainsaw_native_policy.py tests/test_chainsaw_fixture_programmes.py tests/workers/test_worker_http_health.py tests/test_vendor_spec.py tests/test_support_bundle.py tests/test_release.py tests/test_webhook_delivery.py"]
   all:
     desc: Run Python tests against isolated PostgreSQL schemas
     cmds:
       - task: :dev:db
-      - uv run --project src --frozen coverage run --rcfile=src/pyproject.toml -m pytest -q tests --junitxml=reports/python.xml
+      - uv run --project src --frozen coverage run --rcfile=src/pyproject.toml -m pytest -c src/pyproject.toml -q tests --junitxml=reports/python.xml
       - uv run --project src --frozen coverage report --rcfile=src/pyproject.toml
       - uv run --project src --frozen coverage xml --rcfile=src/pyproject.toml -o reports/python-coverage.xml
   tads:
     desc: Run current TADS contract and semantic checks
     cmds:
+      - task: tads:contract
+      - task: tads:semantics
+  tads:contract:
+    desc: Check the pinned BBC document, registered operations and response contracts
+    cmds:
+      - uv run --project src --frozen pytest -c src/pyproject.toml -q tests/test_contract.py --junitxml=reports/tads-contract.xml
+  tads:semantics:
+    desc: Check TADS record, event, webhook and deletion behaviour against PostgreSQL
+    cmds:
       - task: :dev:db
-      - uv run --project src --frozen pytest -q tests/test_repository.py tests/api tests/adapters tests/workers tests/test_auth.py --junitxml=reports/tads.xml
+      - uv run --project src --frozen pytest -c src/pyproject.toml -q tests/api/test_records.py tests/api/test_events.py tests/workers/test_webhooks.py tests/workers/test_deletion.py -m 'not tadoss_security' --junitxml=reports/tads-semantics.xml
   manifests:
     desc: Validate native installation and environment rendering
     cmds:
@@ -23,5 +32,5 @@ tasks:
         cmd: 'kubectl kustomize deploy/environments/{{.ITEM}}/operator > /dev/null && kubectl kustomize deploy/environments/{{.ITEM}} > /dev/null'
       - helm lint deploy/charts/tadoss-issuer
       - helm lint deploy/charts/tadoss-issuer -f deploy/charts/tadoss-issuer/ci/acme-values.yaml
-      - uv run --project src --frozen pytest -q tests/test_repository.py tests/test_documented_task_commands.py tests/test_chainsaw_native_policy.py
+      - uv run --project src --frozen pytest -c src/pyproject.toml -q tests/test_repository.py tests/test_documented_task_commands.py tests/test_chainsaw_native_policy.py
       - for test in operator/test/chainsaw/*/*/chainsaw-test.yaml tests/deployed/chainsaw-test.yaml; do chainsaw lint test --file "$test"; done

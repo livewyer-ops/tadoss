@@ -80,7 +80,7 @@ def get_webhook(request: Request, webhook_id: str, db: Database) -> Response:
 def replace_webhook(
     request: Request, webhook_id: str, db: Database, body: Body
 ) -> Response:
-    background.webhook_save(
+    document = background.webhook_save(
         db,
         webhook_id,
         body,
@@ -88,7 +88,7 @@ def replace_webhook(
         request.app.state.settings,
         replacing=True,
     )
-    return Response(status_code=204)
+    return JSONResponse(document)
 
 
 @router.delete("/service/webhooks/{webhook_id}")

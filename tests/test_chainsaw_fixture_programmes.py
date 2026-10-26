@@ -7,9 +7,7 @@ from unittest.mock import MagicMock, Mock
 from urllib.error import HTTPError, URLError
 
 import httpx
-import psycopg
 import pytest
-from tadoss.settings import Settings
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "operator/test/chainsaw/fixtures/api_check.py"
@@ -82,21 +80,8 @@ def test_fixture_retry_stops_at_the_rollout_deadline(fixture_environment):
 
 
 def test_deployed_process_redacts_transport_failures(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["checks"])
     monkeypatch.setenv("TADOSS_API_TOKEN", MARKER)
-    monkeypatch.setattr(
-        Settings,
-        "load",
-        lambda: Settings(database="host=localhost sslmode=verify-full"),
-    )
-    database = MagicMock()
-    database.__enter__.return_value.execute.return_value.fetchone.return_value = [True]
-    monkeypatch.setattr(
-        psycopg, "connect", Mock(side_effect=[database, psycopg.OperationalError()])
-    )
-    monkeypatch.setattr(
-        "socket.getaddrinfo",
-        Mock(return_value=[(None, None, None, None, ("127.0.0.1", 5432))]),
-    )
     client = MagicMock()
     client.__enter__.return_value.get.side_effect = [
         httpx.Response(200),

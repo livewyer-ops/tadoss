@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 from uuid import uuid4
 
+import pytest
 from tadoss.adapters import postgres as store
 from tadoss.domain.validation import (
     contract_schema,
@@ -160,7 +161,7 @@ def test_overlap_grid_and_atomic_concurrent_writes(api) -> None:
     assert aligned["all_successful"]
 
 
-def test_request_boundaries_and_auth(api) -> None:
+def test_request_boundaries(api) -> None:
     for value in [
         "not-a-range",
         "[01:0_2:0)",
@@ -191,6 +192,11 @@ def test_request_boundaries_and_auth(api) -> None:
             headers={"Content-Type": "application/json"},
             status=400,
         )
+    api.send("POST", api.events, content="{}", status=415)
+
+
+@pytest.mark.tadoss_security
+def test_request_size_limit(api) -> None:
     api.send(
         "POST",
         api.events,
@@ -198,7 +204,10 @@ def test_request_boundaries_and_auth(api) -> None:
         headers={"Content-Type": "application/json"},
         status=413,
     )
-    api.send("POST", api.events, content="{}", status=415)
+
+
+@pytest.mark.tadoss_security
+def test_api_authentication(api) -> None:
     api.send("GET", "/tracks", headers={"Authorization": "Bearer wrong"}, status=401)
     api.send("GET", "/tracks", headers={"Authorization": ""}, status=401)
     api.send(

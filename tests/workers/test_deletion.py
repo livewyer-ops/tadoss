@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from tadoss import worker
 from tadoss.adapters import postgres as store
+from tadoss.adapters import queues
 from tadoss.application import background
 from tadoss.domain.validation import contract_schema, validate
 
@@ -22,13 +23,13 @@ def test_async_deletion_preserves_later_mutations_and_recovers_claim(
     api.send(
         "POST", api.events, test_api.event(id=identifiers[0], payload={"text": "new"})
     )
-    stale = background.claim(api.app.state.pool, api.app.state.settings)
+    stale = queues.claim(api.app.state.pool, api.app.state.settings)
     with store.transaction(api.app.state.pool, write=True) as db:
         db.execute(
             "UPDATE jobs SET lease_until=now()-interval '1 second' WHERE id=%s",
             (stale[0],),
         )
-    job = background.claim(api.app.state.pool, api.app.state.settings)
+    job = queues.claim(api.app.state.pool, api.app.state.settings)
     background.process_delete(api.app.state.pool, stale, api.app.state.settings)
     assert len(api.send("GET", api.events).json()) == 3
     background.process_delete(api.app.state.pool, job, api.app.state.settings)

@@ -2,14 +2,14 @@
 
 import copy
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from typing import Any
-from uuid import uuid4
 
 from psycopg import errors, sql
 from psycopg.types.json import Jsonb
 
 from tadoss.adapters import postgres as store
+from tadoss.adapters import queues
 from tadoss.auth import Identity
 from tadoss.domain.types import Document, Job, Options
 from tadoss.domain.validation import (
@@ -26,18 +26,6 @@ from tadoss.domain.validation import (
 from tadoss.settings import Settings
 
 
-def enqueue(
-    db: store.Database, kind: str, aggregate: str, owner: str, payload: Document
-) -> str:
-    identifier = str(uuid4())
-    db.execute(
-        "INSERT INTO jobs (id, kind, aggregate_id, owner, payload) VALUES "
-        "(%s,%s,%s,%s,%s)",
-        (identifier, kind, aggregate, owner, Jsonb(payload)),
-    )
-    return identifier
-
-
 def publish(
     db: store.Database, event_type: str, resource: Document, event: Document
 ) -> None:
@@ -48,10 +36,6 @@ def publish(
             "application/json"
         ]["schema"],
     )
-    where = sql.SQL(
-        "document->>'status' IN ('created','started') AND (document->'events') ? %s"
-    )
-    params: list[Any] = [Jsonb(body), event_type]
     is_track = event_type.startswith("tracks/")
     values = {"schema_ids": resource["schema_id"] if is_track else resource["id"]}
     if is_track:
@@ -63,24 +47,8 @@ def publish(
                 ],
             }
         )
-    for key, value in values.items():
-        where += sql.SQL(" AND (NOT document ? %s OR (document->%s) ? %s)")
-        params.extend([key, key, value])
-    if is_track:
-        where += sql.SQL(
-            " AND (NOT document ? 'editable_events' OR"
-            " document->'editable_events' = %s)"
-        )
-        params.append(Jsonb(resource["editable_events"]))
-    # PostgreSQL selects subscribers and copies the shared body in one statement.
-    db.execute(
-        sql.SQL(
-            "INSERT INTO jobs (id, kind, aggregate_id, owner, payload)"
-            " SELECT gen_random_uuid()::text, 'webhook', id, owner,"
-            " jsonb_build_object('body', %s::jsonb, 'revision', revision)"
-            " FROM webhooks WHERE {}"
-        ).format(where),
-        params,
+    queues.enqueue_notifications(
+        db, body, event_type, values, resource["editable_events"] if is_track else None
     )
 
 
@@ -301,7 +269,7 @@ def request_delete(
         "options": {k: str(v) if k == "timerange" else v for k, v in options.items()},
         "cutoff": cutoff,
     }
-    identifier = enqueue(db, "delete", track["id"], identity.subject, payload)
+    identifier = queues.enqueue(db, "delete", track["id"], identity.subject, payload)
     return {**request, "id": identifier}
 
 
@@ -333,61 +301,6 @@ def get_delete(db: store.Database, identifier: str) -> Document:
     return delete_document(row)
 
 
-def claim(pool: store.Pool, settings: Settings) -> Job | None:
-    token = str(uuid4())
-    with store.transaction(pool, write=True) as db:
-        row = db.execute(
-            """WITH candidate AS (
-            SELECT id FROM jobs WHERE
-            (status='created' AND available<=now()) OR
-            (status='started' AND lease_until<now())
-            ORDER BY available, created FOR UPDATE SKIP LOCKED LIMIT 1
-        ) UPDATE jobs SET status='started', claim=%s,
-          lease_until=now()+make_interval(secs => %s),
-          attempts=attempts+1, updated=now()
-        FROM candidate WHERE jobs.id=candidate.id
-        RETURNING jobs.id,kind,aggregate_id,payload,attempts,claim""",
-            (token, settings.worker_lease_seconds),
-        ).fetchone()
-        return row
-
-
-def finish(
-    db: store.Database,
-    identifier: str,
-    token: str,
-    status: str,
-    settings: Settings,
-    error: Document | None = None,
-    delay: int = 0,
-    reset_attempts: bool = False,
-) -> bool:
-    expiry = (
-        datetime.now(UTC) + timedelta(seconds=settings.worker_queue_retention_seconds)
-        if status in {"done", "error"} and settings.worker_queue_retention_seconds
-        else None
-    )
-    return (
-        db.execute(
-            "UPDATE jobs SET "
-            "status=%s,error=%s,claim=NULL,lease_until=NULL,updated=now(),available=now()+make_interval(secs"
-            " => %s),expiry=%s,attempts=CASE WHEN %s THEN 0 ELSE attempts END "
-            "WHERE id=%s AND claim=%s AND lease_until>now() "
-            "RETURNING id",
-            (
-                status,
-                Jsonb(error) if error else None,
-                delay,
-                expiry,
-                reset_attempts,
-                identifier,
-                token,
-            ),
-        ).fetchone()
-        is not None
-    )
-
-
 def process_delete(pool: store.Pool, job: Job, settings: Settings) -> None:
     identifier, _, track_id, payload, _, token = job
     with store.transaction(pool, write=True, lock=track_id) as db:
@@ -403,7 +316,7 @@ def process_delete(pool: store.Pool, job: Job, settings: Settings) -> None:
             db.execute(
                 "UPDATE jobs SET payload=%s WHERE id=%s", (Jsonb(payload), identifier)
             )
-            finish(db, identifier, token, "done", settings)
+            queues.finish(db, identifier, token, "done", settings)
             return
         records = selected_events(
             db,
@@ -449,7 +362,7 @@ def process_delete(pool: store.Pool, job: Job, settings: Settings) -> None:
         db.execute(
             "UPDATE jobs SET payload=%s WHERE id=%s", (Jsonb(payload), identifier)
         )
-        if not finish(
+        if not queues.finish(
             db,
             identifier,
             token,

@@ -1,1 +1,8 @@
-[{"version":"0.1.0","apiImage":"livewyer/tadoss-api:0.1.0","schemaTarget":"0001_baseline"}]
+[
+  {
+    "version": "0.1.0",
+    "apiImage": "livewyer/tadoss-api:0.1.0",
+    "schemaTarget": "0001_baseline",
+    "upgradeFrom": []
+  }
+]

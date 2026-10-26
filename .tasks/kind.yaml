@@ -91,6 +91,12 @@ tasks:
           --cacert {{printf ".local/%s-ca.pem" .CLUSTER | shellQuote}} --resolve "$host:{{.HTTPS_PORT}}:127.0.0.1" "https://$host:{{.HTTPS_PORT}}/readyz")
         test "$status" = 200
         printf 'Verified HTTPS ingress returned %s\n' "$status"
+        TADOSS_API_TOKEN=$(kubectl --kubeconfig {{.KUBECONFIG | shellQuote}} -n tads get secret tadoss-api-token -o jsonpath='{.data.token}' | base64 -d) \
+          docker run --rm --network host --add-host "$host:127.0.0.1" --env TADOSS_API_TOKEN \
+          --mount type=bind,src={{printf "%s/tests/deployed" .ROOT_DIR | shellQuote}},dst=/check,readonly \
+          --mount type=bind,src={{printf "%s/.local/%s-ca.pem" .ROOT_DIR .CLUSTER | shellQuote}},dst=/check-ca.pem,readonly \
+          {{.KIND_API_IMAGE | shellQuote}} python /check/checks.py \
+          --api-url "https://$host:{{.HTTPS_PORT}}" --ca-file /check-ca.pem
   down:
     desc: Delete the selected disposable Kind cluster
     cmds: ['kind delete cluster --name {{.CLUSTER | shellQuote}} --kubeconfig {{.KUBECONFIG | shellQuote}}']

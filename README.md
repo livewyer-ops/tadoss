@@ -23,6 +23,8 @@ task kind:test CLUSTER=tadoss-demo PROFILE=local-kind
 
 Use a unique cluster name. `task kind:down CLUSTER=tadoss-demo` deletes that cluster and its data.
 
+Create and query a transcript with the [first-data walkthrough](docs/tutorials/quickstart.md#create-a-transcript).
+
 ## Project
 
 | Group | Contents |
