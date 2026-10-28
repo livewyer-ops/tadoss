@@ -12,7 +12,7 @@
 | `task kind:test PROFILE=... CLUSTER=...` | Real migration, verified HTTPS ingress, API, worker, strict diff and deployed behaviour |
 | `task security:audit` | Locked Python and Go dependency advisories |
 
-CI qualifies local-kind, edge, single-server and multi-server and a native ARM64 runner. Release qualification uses the built immutable image references. Chainsaw covers lifecycle, recovery, deletion/retention, namespace deletion, external databases and credential rotation. Each test creates its own resources.
+CI qualifies local-kind, single-server and multi-server, including single-server on a native ARM64 runner. Release qualification uses the built immutable image references. Chainsaw covers lifecycle, recovery, deletion/retention, namespace deletion, external databases and credential rotation. Each test creates its own resources.
 
 Security policy and infrastructure regressions remain in `task test:all`; authentication also runs in `task test:fast`. `task test:tads` writes `reports/tads-contract.xml` and `reports/tads-semantics.xml`, both retained by CI.
 

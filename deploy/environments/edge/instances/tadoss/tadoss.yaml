@@ -1,7 +1,0 @@
-apiVersion: tadoss.livewyer.io/v1alpha1
-kind: Tadoss
-metadata:
-  name: tadoss
-  namespace: tads
-spec:
-  version: 0.1.0-rc2

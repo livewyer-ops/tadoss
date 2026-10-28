@@ -6,7 +6,7 @@
 
 | Field | Purpose |
 | --- | --- |
-| `profile` | `local-kind`, `edge`, `single-server`, or `multi-server` |
+| `profile` | `local-kind`, `single-server`, or `multi-server` |
 | `publicEndpoint.baseDomain` | Derives `api.<instance>.<namespace>.<domain>` |
 | `api`, `worker` | Image, replicaCount, resources, env/envFrom, scheduling, pod/container security, volumes, probes and disruption budget |
 | `backends.db.providedBy` | `cnpg` or `external`; immutable after creation |
@@ -61,7 +61,7 @@ JWT verification requires `exp`, `sub`, `iss` and `aud`; the nonempty `sub` is t
 | `api.image` / `worker.image` | Release catalogue / resolved API image |
 | `api.imagePullPolicy`, `worker.imagePullPolicy` | `IfNotPresent` |
 | `api.replicaCount`, `worker.replicaCount` | 2 for multi-server, otherwise 1; zero stops that component |
-| `api.resources`, `worker.resources` | Requests 100m CPU and 128Mi memory (64Mi on edge); limits 1 CPU and 512Mi |
+| `api.resources`, `worker.resources` | Requests 100m CPU and 128Mi memory; limits 1 CPU and 512Mi |
 | `backends.db.providedBy` | `cnpg`; immutable |
 | `backends.db.cnpg.instances` | 3 for multi-server, otherwise 1; allowed 1 through 5 |
 | `backends.db.cnpg.storage`, `storageClass` | 5Gi; cluster default storage class |

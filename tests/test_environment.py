@@ -111,7 +111,7 @@ def test_kind_uses_selected_environment_and_kubeconfig(tmp_path):
             "--dry",
             "kind:test",
             "CLUSTER=selected",
-            "PROFILE=edge",
+            "PROFILE=single-server",
             "IMAGE_TAG=selected-build",
             f"KUBECONFIG={selected}",
         ],
@@ -124,10 +124,8 @@ def test_kind_uses_selected_environment_and_kubeconfig(tmp_path):
     commands = result.stderr
     assert "/wrong.kubeconfig" not in commands
     assert f"--kubeconfig {selected}" in commands
-    assert (
-        "apply --server-side -k " + str(ROOT / ".local/environments/selected-edge")
-        in commands
-    )
+    environment = ROOT / ".local/environments/selected-single-server"
+    assert f"apply --server-side -k {environment}" in commands
     assert "livewyer/tadoss-api:selected-build" in commands
     assert "livewyer/tadoss-operator:selected-build" in commands
 

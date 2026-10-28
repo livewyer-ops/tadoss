@@ -52,7 +52,7 @@ func Load(path string) Installation {
 
 func validProfile(value string) bool {
 	switch value {
-	case "local-kind", "edge", "single-server", "multi-server":
+	case "local-kind", "single-server", "multi-server":
 		return true
 	}
 	return false

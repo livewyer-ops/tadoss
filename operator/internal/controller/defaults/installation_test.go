@@ -12,13 +12,13 @@ import (
 )
 
 func TestResolvePrecedenceAndValidation(t *testing.T) {
-	installation := Installation{Profile: "edge", BaseDomain: "example.com", IngressClassName: "traefik", Revision: "revision"}
+	installation := Installation{Profile: "single-server", BaseDomain: "example.com", IngressClassName: "traefik", Revision: "revision"}
 	source := &tadossv1.Tadoss{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "team"}, Spec: tadossv1.TadossSpec{Version: "0.1.0-rc1"}}
 	resolved := source.DeepCopy()
 	if err := Resolve(resolved, installation); err != nil {
 		t.Fatal(err)
 	}
-	if source.Spec.Profile != "" || resolved.Spec.Profile != "edge" || resolved.Spec.Ingress.Host != "api.data.team.example.com" || resolved.Status.Resolved.DefaultsRevision != "revision" {
+	if source.Spec.Profile != "" || resolved.Spec.Profile != "single-server" || resolved.Spec.Ingress.Host != "api.data.team.example.com" || resolved.Status.Resolved.DefaultsRevision != "revision" {
 		t.Fatal("defaults must resolve on the working copy")
 	}
 	resolved.Spec.Profile = "multi-server"
@@ -41,7 +41,7 @@ func TestResolvePrecedenceAndValidation(t *testing.T) {
 
 func TestInstallationRejectsUnknownSettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "defaults.yaml")
-	for _, content := range []string{"profile: unknown\n", "baseDomain: bad..domain\n", "profile: edge\nunknown: value\n"} {
+	for _, content := range []string{"profile: unknown\n", "baseDomain: bad..domain\n", "profile: single-server\nunknown: value\n"} {
 		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -59,12 +59,12 @@ func TestResolveRejectsMalformedOAuthAndIngressClass(t *testing.T) {
 		{Issuer: "https://issuer.example", Audience: "tadoss", JWKSURI: "http://issuer.example/jwks"},
 		{Algorithms: []string{"HS256"}},
 	} {
-		cr := &tadossv1.Tadoss{Spec: tadossv1.TadossSpec{Version: "0.1.0-rc1", Profile: "edge", Auth: tadossv1.AuthSpec{OAuth2: oauth}}}
+		cr := &tadossv1.Tadoss{Spec: tadossv1.TadossSpec{Version: "0.1.0-rc1", Profile: "single-server", Auth: tadossv1.AuthSpec{OAuth2: oauth}}}
 		if Resolve(cr, Installation{}) == nil {
 			t.Fatal("invalid OAuth accepted")
 		}
 	}
-	cr := &tadossv1.Tadoss{Spec: tadossv1.TadossSpec{Version: "0.1.0-rc1", Profile: "edge"}}
+	cr := &tadossv1.Tadoss{Spec: tadossv1.TadossSpec{Version: "0.1.0-rc1", Profile: "single-server"}}
 	if Resolve(cr, Installation{IngressClassName: "INVALID_CLASS"}) == nil {
 		t.Fatal("invalid installation ingress class accepted")
 	}

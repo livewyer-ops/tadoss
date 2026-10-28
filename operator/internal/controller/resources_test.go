@@ -23,7 +23,7 @@ func instance() *tadossv1.Tadoss {
 }
 
 func TestProfilesAndCredentialRollouts(t *testing.T) {
-	for _, profile := range []string{"local-kind", "edge", "single-server", "multi-server"} {
+	for _, profile := range []string{"local-kind", "single-server", "multi-server"} {
 		t.Run(profile, func(t *testing.T) {
 			cr := instance()
 			cr.Spec.Profile = profile

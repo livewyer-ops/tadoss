@@ -28,7 +28,7 @@ tasks:
     desc: Validate native installation and environment rendering
     cmds:
       - kubectl kustomize deploy/operator > /dev/null
-      - for: [local-kind, edge, single-server, multi-server]
+      - for: [local-kind, single-server, multi-server]
         cmd: 'kubectl kustomize deploy/environments/{{.ITEM}}/operator > /dev/null && kubectl kustomize deploy/environments/{{.ITEM}} > /dev/null'
       - helm lint deploy/charts/tadoss-authentik
       - helm lint deploy/charts/tadoss-issuer

@@ -5783,7 +5783,6 @@ spec:
               profile:
                 enum:
                 - local-kind
-                - edge
                 - single-server
                 - multi-server
                 type: string

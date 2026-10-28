@@ -28,12 +28,8 @@ func secretKeyEnv(name, secretName, key string) corev1.EnvVar {
 func pod(t *tadossv1.Tadoss, databaseSecret, tokenSecret string) corev1.PodTemplateSpec {
 	podLabels := labels(t)
 	podLabels["app.kubernetes.io/component"] = "api"
-	memory := "128Mi"
-	if t.Spec.Profile == tadossv1.ProfileEdge {
-		memory = "64Mi"
-	}
 	resources := withDefaults(t.Spec.API.Resources,
-		corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse(memory)},
+		corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("128Mi")},
 		corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")})
 	template := corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{Labels: podLabels},

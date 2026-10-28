@@ -17,7 +17,6 @@ const (
 	DeletionPolicyDelete = "Delete"
 
 	ProfileLocalKind    = "local-kind"
-	ProfileEdge         = "edge"
 	ProfileSingleServer = "single-server"
 	ProfileMultiServer  = "multi-server"
 
@@ -191,7 +190,7 @@ type NetworkPolicySpec struct {
 type TadossSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	Version string `json:"version"`
-	// +kubebuilder:validation:Enum=local-kind;edge;single-server;multi-server
+	// +kubebuilder:validation:Enum=local-kind;single-server;multi-server
 	Profile        string             `json:"profile,omitempty"`
 	Paused         bool               `json:"paused,omitempty"`
 	PublicEndpoint PublicEndpointSpec `json:"publicEndpoint,omitempty"`
