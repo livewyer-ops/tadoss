@@ -33,6 +33,8 @@ jobs:
       - run: task setup
       - run: task check
       - run: task test:tads
+      - name: Performance harness smoke test
+        run: task test:performance -- --duration 0.2 --warmup 0.1 --repeats 1 --concurrency 2 --cases page range write-1 write-100 mixed --tracks 2 --events 100 --worker
       - run: task security:audit
       - name: Generated files are current
         run: |
@@ -47,6 +49,7 @@ jobs:
             reports/python*.xml
             reports/tads-*.xml
             reports/go-coverage.*
+            reports/performance/*.json
           if-no-files-found: warn
   kind:
     runs-on: ${{ matrix.runner }}

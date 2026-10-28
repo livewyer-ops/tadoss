@@ -33,12 +33,16 @@ Multi-server defaults to two API and worker replicas and three database instance
 | --- | --- |
 | `TADOSS_DATABASE` | Required outside development mode |
 | `TADOSS_DATABASE_SSL_ROOT_CERT` | CA path; forces `sslmode=verify-full` |
+| `TADOSS_DATABASE_HOST` | Optional host override preserving URI credentials and TLS |
+| `TADOSS_METRICS_TOKEN` | Optional bearer credential valid only on `/metrics` |
 | `TADOSS_API_TOKEN` | Query token authentication |
 | `TADOSS_BASIC_AUTH_USERNAME`, `TADOSS_BASIC_AUTH_PASSWORD` | Username defaults to `tadoss`; password enables Basic |
 | `TADOSS_OAUTH2_ISSUER`, `TADOSS_OAUTH2_AUDIENCE`, `TADOSS_OAUTH2_JWKS_URI` | All required to enable JWT bearer verification |
 | `TADOSS_POOL_MIN_SIZE`, `TADOSS_POOL_MAX_SIZE` | 1 / 10 per process |
 | `TADOSS_POOL_TIMEOUT` | 30 seconds for request admission and for acquiring a database connection |
-| `TADOSS_STATEMENT_TIMEOUT` | 30s |
+| `TADOSS_MAX_INFLIGHT_REQUESTS` | 100 per API process; excess requests receive 503 with `Retry-After: 1` before authentication or body buffering |
+| `TADOSS_BODY_READ_TIMEOUT` | 10 seconds for the entire request body; expiry returns 408; the size limit remains 1 MiB |
+| `TADOSS_STATEMENT_TIMEOUT` | 30s; applied locally on every application transaction, including transaction pooling |
 | `TADOSS_DELETE_BATCH_SIZE`, `TADOSS_DELETE_SYNC_SECONDS` | 1000 / 1 second before deferred work |
 | `TADOSS_WORKER_LEASE_SECONDS` | 60 seconds |
 | `TADOSS_WORKER_QUEUE_RETENTION_SECONDS` | 604800; zero disables terminal-job expiry |
@@ -48,7 +52,7 @@ Multi-server defaults to two API and worker replicas and three database instance
 
 Typed Kubernetes fields own their corresponding environment variables. Secret and CA object revisions trigger workload rollouts. Configure the same worker settings on API and worker when changing queue behaviour. PostgreSQL JSONB cannot store NUL or lone surrogate characters; writes reject them with a client error, independently for each event in a batch.
 
-The API admits up to `TADOSS_POOL_MAX_SIZE` database requests per process. Further requests wait asynchronously and receive HTTP 503 with `Retry-After` if admission times out. Authentication and input parsing precede admission. Admitted synchronous work finishes its transaction before releasing capacity, including when the request is cancelled. Size database pools across all API and worker replicas against PostgreSQL's connection limit.
+The API bounds total in-flight requests before authentication and body buffering. Health and readiness probes and authenticated metrics scraping bypass this HTTP limit. Within that bound, it admits up to `TADOSS_POOL_MAX_SIZE` database requests per process. Further requests wait asynchronously and receive HTTP 503 with `Retry-After` if database admission times out. Authentication and input parsing precede database admission. Admitted synchronous work finishes its transaction before releasing capacity, including when the request is cancelled. Size database pools across all API and worker replicas against PostgreSQL's connection limit, reserving connections for probes, migration and administration. Increasing HTTP capacity does not increase database capacity; it permits more queued requests and buffered bodies. Configure these settings through the existing API workload `env` fields.
 
 JWT verification requires `exp`, `sub`, `iss` and `aud`; the nonempty `sub` is the identity. Scopes may be a space-separated string or a list of strings in `scope`, with `scp` used only when `scope` is absent. Other scope values grant no permissions.
 

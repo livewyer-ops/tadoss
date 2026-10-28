@@ -1,6 +1,7 @@
 """FastAPI dependencies for validated requests and transaction lifetimes."""
 
 import json
+import time
 from collections.abc import AsyncIterator, Iterator
 from typing import Annotated, Any
 
@@ -37,10 +38,14 @@ async def json_body(
     ):
         raise APIError(415, "Content-Type must be application/json")
     raw = bytearray()
-    async for chunk in request.stream():
-        if len(raw) + len(chunk) > MAX_BODY:
-            raise APIError(413, "Request body exceeds 1 MiB")
-        raw.extend(chunk)
+    try:
+        with anyio.fail_after(request.app.state.settings.body_read_timeout):
+            async for chunk in request.stream():
+                if len(raw) + len(chunk) > MAX_BODY:
+                    raise APIError(413, "Request body exceeds 1 MiB")
+                raw.extend(chunk)
+    except TimeoutError:
+        raise APIError(408, "Request body read timed out") from None
     try:
         return json.loads(raw, parse_constant=finite_float, parse_float=finite_float)
     except (ValueError, UnicodeError, RecursionError) as exc:
@@ -62,17 +67,25 @@ async def database_slot(
 ) -> AsyncIterator[None]:
     # Wait without consuming the threads needed by requests holding connections.
     slots: anyio.CapacityLimiter = request.app.state.database_slots
+    started = time.perf_counter()
+    metrics.DATABASE_WAITING.inc()
     try:
         with anyio.fail_after(request.app.state.settings.pool_timeout):
             await slots.acquire()
     except TimeoutError:
+        metrics.ADMISSION_REJECTIONS.labels("database").inc()
         raise PoolTimeout("Database request admission timed out") from None
+    finally:
+        metrics.DATABASE_WAITING.dec()
+        metrics.ADMISSION_WAIT.observe(time.perf_counter() - started)
+    metrics.DATABASE_ACTIVE.inc()
     try:
         # Synchronous work and transaction cleanup must finish before cancellation.
         with anyio.CancelScope(shield=True):
             yield
     finally:
         slots.release()
+        metrics.DATABASE_ACTIVE.dec()
 
 
 def database(

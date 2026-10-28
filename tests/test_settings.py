@@ -11,6 +11,8 @@ from tadoss.settings import Settings
         ("TADOSS_POOL_MIN_SIZE", "99"),
         ("TADOSS_DELETE_MAX_ATTEMPTS", "0"),
         ("TADOSS_POOL_TIMEOUT", "nan"),
+        ("TADOSS_MAX_INFLIGHT_REQUESTS", "0"),
+        ("TADOSS_BODY_READ_TIMEOUT", "nan"),
         ("TADOSS_DOCS", "maybe"),
         ("TADOSS_OAUTH2_ISSUER", "http://issuer.test"),
         ("TADOSS_PORT", "65536"),
@@ -47,6 +49,25 @@ def test_boolean_file_is_parsed(tmp_path):
     flag.write_text("false\n")
     with patch.dict(os.environ, {"TADOSS_DOCS_FILE": str(flag)}):
         assert Settings.load().docs is False
+
+
+def test_pooler_host_preserves_credentials_and_verified_tls():
+    from psycopg.conninfo import conninfo_to_dict
+
+    settings = Settings(
+        database="postgresql://user:pass@primary:5432/tadoss?sslmode=disable",
+        database_host="instance-pooler.namespace.svc",
+        database_ssl_root_cert="/ca.pem",
+    )
+    assert conninfo_to_dict(settings.database_url()) == {
+        "user": "user",
+        "password": "pass",
+        "host": settings.database_host,
+        "port": "5432",
+        "dbname": "tadoss",
+        "sslmode": "verify-full",
+        "sslrootcert": "/ca.pem",
+    }
 
 
 def test_delete_attempts_file(tmp_path):

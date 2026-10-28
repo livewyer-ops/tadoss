@@ -23,3 +23,5 @@ The platform is shared infrastructure. The operator installation supplies policy
 PostgreSQL transactions contain both data mutations and notification jobs. A worker claims bounded jobs with a lease and fencing token; stale claims cannot commit completion. Webhooks use bounded retries and terminal-job expiry. Event deletion captures a mutation sequence cutoff, so later inserts and updates survive. Whole-track deletion reserves the track until completion; deletion ranges update as batches finish.
 
 Collection and event pagination use SQL keysets. API memory is bounded by page and batch sizes. PostgreSQL range columns preserve exact time ordering and overlap constraints. Application-level validation and database constraints both protect writes.
+
+Event batches with distinct IDs use one SQL upsert when the track permits overlaps. Batches with duplicate IDs or overlap restrictions apply writes in order, so later events see earlier changes. Both paths preserve per-event results and enforce global event ownership in PostgreSQL, including when different tracks write the same ID concurrently.

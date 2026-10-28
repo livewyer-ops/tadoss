@@ -17,7 +17,13 @@ from tadoss.domain.validation import (
 )
 
 type Database = Cursor[tuple[Any, ...]]
-type Pool = ConnectionPool[Connection[tuple[Any, ...]]]
+
+
+class Pool(ConnectionPool[Connection[tuple[Any, ...]]]):
+    """Connection pool with the timeout applied to each application transaction."""
+
+    statement_timeout: str = "30s"
+
 
 DEFAULT_DATABASE = "postgresql://tadoss:tadoss@127.0.0.1:15432/tadoss"
 # Tables addressed by name from the API; anything else is a programming error.
@@ -37,15 +43,7 @@ def create_pool(
     configure: Callable[[Connection[tuple[Any, ...]]], None] | None = None,
     statement_timeout: str = "30s",
 ) -> Pool:
-    def configure_connection(connection: Connection[tuple[Any, ...]]) -> None:
-        connection.execute(
-            "SELECT set_config('statement_timeout', %s, false)", (statement_timeout,)
-        )
-        connection.commit()
-        if configure:
-            configure(connection)
-
-    return ConnectionPool(
+    pool = Pool(
         database,
         min_size=min_size,
         max_size=max_size,
@@ -53,12 +51,19 @@ def create_pool(
         open=False,
         kwargs={"connect_timeout": 10},
         name="tadoss",
-        configure=configure_connection,
+        configure=configure,
+        check=Pool.check_connection,
     )
+    pool.statement_timeout = statement_timeout
+    return pool
 
 
 def initialize(pool: Pool) -> None:
     with pool.connection() as connection, connection.cursor() as db:
+        db.execute(
+            "SELECT set_config('statement_timeout', %s, true)",
+            (pool.statement_timeout,),
+        )
         db.execute("SELECT pg_advisory_xact_lock(%s)", (LOCK_SPACE,))
         migrations.apply(db)
         check_schema(db)
@@ -85,11 +90,11 @@ def transaction(
             db.execute("SET LOCAL lock_timeout = '10s'")
         else:
             db.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
-        if timeout is not None:
-            db.execute(
-                "SELECT set_config('statement_timeout', %s, true)",
-                (str(int(timeout * 1000)),),
-            )
+        # PgBouncer can assign a different server connection each transaction.
+        db.execute(
+            "SELECT set_config('statement_timeout', %s, true)",
+            (pool.statement_timeout if timeout is None else str(int(timeout * 1000)),),
+        )
         if write:
             db.execute(
                 "SELECT pg_advisory_xact_lock(%s, hashtext(%s))", (LOCK_SPACE, lock)
@@ -266,22 +271,37 @@ def delete_events(db: Database, track_id: str, options: Options) -> int:
     return db.rowcount
 
 
-def upsert_event(
-    db: Database, track_id: str, record: Document, timerange: TimeRange
-) -> bool:
-    """Insert or replace an event; False when the id belongs to another track."""
+def upsert_events(
+    db: Database, track_id: str, records: list[tuple[Document, TimeRange]]
+) -> set[str]:
+    """Upsert distinct event IDs, returning only those owned by this track."""
     db.execute(
-        "INSERT INTO events (id, track_id, document, timerange,"
-        " sort_start, sort_start_excl, sort_end, sort_end_incl)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
-        " ON CONFLICT (id) DO UPDATE SET document = excluded.document,"
-        " timerange = excluded.timerange, sort_start = excluded.sort_start,"
-        " sort_start_excl = excluded.sort_start_excl, sort_end = excluded.sort_end,"
-        " sort_end_incl = excluded.sort_end_incl, mutation=nextval('event_mutation')"
-        " WHERE events.track_id = excluded.track_id",
-        (record["id"], track_id, Jsonb(record), *range_columns(timerange)),
+        sql.SQL(
+            "INSERT INTO events (id, track_id, document, timerange,"
+            " sort_start, sort_start_excl, sort_end, sort_end_incl) VALUES {}"
+            " ON CONFLICT (id) DO UPDATE SET document = excluded.document,"
+            " timerange = excluded.timerange, sort_start = excluded.sort_start,"
+            " sort_start_excl = excluded.sort_start_excl, sort_end = excluded.sort_end,"
+            " sort_end_incl = excluded.sort_end_incl,"
+            " mutation=nextval('event_mutation')"
+            " WHERE events.track_id = excluded.track_id RETURNING id"
+        ).format(
+            sql.SQL(", ").join(
+                sql.SQL("(%s, %s, %s, %s, %s, %s, %s, %s)") for _ in records
+            )
+        ),
+        [
+            value
+            for record, timerange in records
+            for value in (
+                record["id"],
+                track_id,
+                Jsonb(record),
+                *range_columns(timerange),
+            )
+        ],
     )
-    return db.rowcount == 1
+    return {row[0] for row in db.fetchall()}
 
 
 def overlapping_exists(

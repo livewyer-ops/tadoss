@@ -2,6 +2,7 @@ from dataclasses import replace
 from unittest.mock import patch
 from uuid import uuid4
 
+import pytest
 from tadoss import worker
 from tadoss.adapters import postgres as store
 from tadoss.adapters import queues
@@ -11,8 +12,9 @@ from tadoss.domain.validation import contract_schema, validate
 from tests.support import api as test_api
 
 
+@pytest.mark.parametrize("updated_count", [1, 2])
 def test_async_deletion_preserves_later_mutations_and_recovers_claim(
-    api, request
+    api, updated_count
 ) -> None:
     api.app.state.settings = replace(api.app.state.settings, delete_batch_size=1)
     identifiers = [str(uuid4()) for _ in range(3)]
@@ -21,7 +23,12 @@ def test_async_deletion_preserves_later_mutations_and_recovers_claim(
     request = response.json()
     validate(request, contract_schema("track-delete-request"))
     api.send(
-        "POST", api.events, test_api.event(id=identifiers[0], payload={"text": "new"})
+        "POST",
+        api.events,
+        [
+            test_api.event(id=identifier, payload={"text": "new"})
+            for identifier in identifiers[:updated_count]
+        ],
     )
     stale = queues.claim(api.app.state.pool, api.app.state.settings)
     with store.transaction(api.app.state.pool, write=True) as db:
@@ -35,7 +42,9 @@ def test_async_deletion_preserves_later_mutations_and_recovers_claim(
     background.process_delete(api.app.state.pool, job, api.app.state.settings)
     while worker.run_once(api.app.state.pool, api.app.state.settings):
         pass
-    assert [x["id"] for x in api.send("GET", api.events).json()] == identifiers[:1]
+    assert {x["id"] for x in api.send("GET", api.events).json()} == set(
+        identifiers[:updated_count]
+    )
     assert api.send("GET", response.headers["Location"]).json()["status"] == "done"
 
 
