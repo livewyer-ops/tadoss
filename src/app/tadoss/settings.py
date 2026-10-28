@@ -27,9 +27,11 @@ def env_flag(name: str, default: bool | None) -> bool | None:
 @dataclass(frozen=True)
 class Settings:
     database: str = ""
+    database_host: str = ""
     database_ssl_root_cert: str = ""
     schema_target: str = RELEASE["schemaTarget"]
     api_token: str = ""
+    metrics_token: str = ""
     basic_auth_username: str = "tadoss"
     basic_auth_password: str = ""
     dev: bool = False
@@ -39,6 +41,8 @@ class Settings:
     pool_min_size: int = 1
     pool_max_size: int = 10
     pool_timeout: float = 30.0
+    max_inflight_requests: int = 100
+    body_read_timeout: float = 10.0
     statement_timeout: str = "30s"
     migrate_timeout: float = 300.0
     oauth2_issuer: str = ""
@@ -160,14 +164,15 @@ class Settings:
 
     def database_url(self) -> str:
         if self.database:
-            if self.database_ssl_root_cert:
+            if self.database_ssl_root_cert or self.database_host:
                 from psycopg.conninfo import make_conninfo
 
-                return make_conninfo(
-                    self.database,
-                    sslmode="verify-full",
-                    sslrootcert=self.database_ssl_root_cert,
-                )
+                options = {"host": self.database_host} if self.database_host else {}
+                if self.database_ssl_root_cert:
+                    options.update(
+                        sslmode="verify-full", sslrootcert=self.database_ssl_root_cert
+                    )
+                return make_conninfo(self.database, **options)
             return self.database
         if self.dev:
             return "postgresql://tadoss:tadoss@127.0.0.1:15432/tadoss"

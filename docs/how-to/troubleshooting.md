@@ -18,6 +18,18 @@ The bundle allowlists resource names and selected status/condition fields. It ex
 
 CNPG database pods have a long shutdown grace period. Kubernetes can defer namespace cleanup based on that period even when the pods finish sooner. For disposable environments, delete the instance and wait for its database pods to disappear before deleting the namespace. With `deletionPolicy: Retain`, the database remains until you explicitly remove it; do that only when its data is no longer needed.
 
+## API saturation
+
+`tadoss_http_inflight` counts requests admitted before body buffering, including the metrics scrape itself. `tadoss_admission_rejections_total{stage="http"}` counts immediate capacity rejections; `stage="database"` counts database-admission timeouts. Both return 503 with `Retry-After`. A 408 indicates the total body-read deadline expired. Health/readiness bypass HTTP admission and the shared request thread pool. Readiness permits one database probe at a time, returning 503 to additional probes; database pressure can also make it unavailable.
+
+`tadoss_database_active`, `tadoss_database_waiting` and `tadoss_database_admission_seconds` separate work holding admission from queued work. `tadoss_database_pool_connections` (states `size`, `available`, `maximum`) and `tadoss_database_pool_waiting` report the underlying pool once per second. `tadoss_event_loop_lag_seconds` samples scheduling delay at the same interval. Metrics remain process-local with bounded labels.
+
+```promql
+sum by (stage) (rate(tadoss_admission_rejections_total[5m]))
+histogram_quantile(0.95, sum by (le) (rate(tadoss_database_admission_seconds_bucket[5m])))
+histogram_quantile(0.95, sum by (le) (rate(tadoss_event_loop_lag_seconds_bucket[5m])))
+```
+
 ## Event and webhook metrics
 
 An HTTP 200 event-batch response can contain rejected records. `tadoss_events_total` counts each result from batches whose database transaction committed, with `outcome` set to `created`, `updated` or `rejected`. Failed transactions contribute no event outcomes. `tadoss_event_batch_size` records submitted batch sizes after request admission.

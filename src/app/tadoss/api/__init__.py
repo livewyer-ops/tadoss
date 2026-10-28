@@ -1,4 +1,5 @@
 import copy
+import hmac
 import logging
 import time
 from collections.abc import AsyncIterator
@@ -23,6 +24,7 @@ from tadoss.domain.validation import (
 )
 from tadoss.settings import Settings
 
+from .admission import RequestAdmission
 from .routes import router
 
 PROBES = {"/healthz", "/readyz"}
@@ -111,17 +113,29 @@ def create_app(
         statement_timeout=settings.statement_timeout,
         configure=lambda connection: telemetry.instrument_connection(connection, app),
     )
+    probe_pool = store.create_pool(database, min_size=0, max_size=1, timeout=2)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.database_slots = anyio.CapacityLimiter(settings.pool_max_size)
+        app.state.readiness_slots = anyio.CapacityLimiter(1)
+        app.state.readiness_threads = anyio.CapacityLimiter(1)
+        app.state.metrics_slots = anyio.CapacityLimiter(1)
+        app.state.metrics_threads = anyio.CapacityLimiter(1)
         # Connections are established in the background; a request waits up to the
         # pool timeout for one, so a slow database delays readiness instead of
         # crashing the process.
         pool.open(wait=False)
+        probe_pool.open(wait=False)
         try:
-            yield
+            async with anyio.create_task_group() as tasks:
+                tasks.start_soon(metrics.monitor_pool, pool)
+                try:
+                    yield
+                finally:
+                    tasks.cancel_scope.cancel()
         finally:
+            probe_pool.close()
             pool.close()
             telemetry.shutdown(app)
 
@@ -136,6 +150,7 @@ def create_app(
     app.state.pool = pool
     app.state.settings = settings
     app.state.authentication = authentication
+    app.add_middleware(RequestAdmission, maximum=settings.max_inflight_requests)
     app.add_middleware(AccessLog)
     app.add_middleware(CorrelationIdMiddleware, header_name="X-Request-ID")
     telemetry.instrument(app)
@@ -195,18 +210,36 @@ def create_app(
         )
 
     @app.get("/metrics", include_in_schema=False)
-    def prometheus_metrics(request: Request) -> Response:
-        authentication.authenticate(request)
-        return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+    async def prometheus_metrics(request: Request) -> Response:
+        def collect() -> Response:
+            scheme, _, token = request.headers.get("authorization", "").partition(" ")
+            if not (
+                settings.metrics_token
+                and scheme.lower() == "bearer"
+                and hmac.compare_digest(token.encode(), settings.metrics_token.encode())
+            ):
+                authentication.authenticate(request)
+            return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+        slots = app.state.metrics_slots
+        try:
+            slots.acquire_nowait()
+        except anyio.WouldBlock:
+            return Response(status_code=503, headers={"Retry-After": "1"})
+        try:
+            return await anyio.to_thread.run_sync(
+                collect, limiter=app.state.metrics_threads
+            )
+        finally:
+            slots.release()
 
     @app.get("/healthz", include_in_schema=False)
-    def health() -> dict[str, str]:
+    async def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.get("/readyz", include_in_schema=False, response_model=None)
-    def ready() -> dict[str, str] | JSONResponse:
+    def check_readiness() -> dict[str, str] | JSONResponse:
         try:
-            with store.transaction(pool, timeout=2) as db:
+            with store.transaction(probe_pool, timeout=2) as db:
                 store.check_schema(db)
         except psycopg.OperationalError:
             return JSONResponse(
@@ -217,6 +250,23 @@ def create_app(
                 {"status": "not ready", "reason": "schema"}, status_code=503
             )
         return {"status": "ready"}
+
+    @app.get("/readyz", include_in_schema=False, response_model=None)
+    async def ready() -> dict[str, str] | JSONResponse:
+        # Bound probes separately so auth/route threads cannot starve readiness.
+        slots: anyio.CapacityLimiter = app.state.readiness_slots
+        try:
+            slots.acquire_nowait()
+        except anyio.WouldBlock:
+            return JSONResponse(
+                {"status": "not ready", "reason": "busy"}, status_code=503
+            )
+        try:
+            return await anyio.to_thread.run_sync(
+                check_readiness, limiter=app.state.readiness_threads
+            )
+        finally:
+            slots.release()
 
     app.include_router(router, include_in_schema=False)
     app.openapi = published_contract

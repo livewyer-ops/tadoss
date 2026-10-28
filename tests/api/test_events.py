@@ -1,6 +1,7 @@
 import base64
 import json
 from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -312,18 +313,45 @@ def test_decoded_event_cursor_identifiers_are_validated(api, subtests) -> None:
                 )
 
 
-def test_same_id_on_two_tracks_concurrently(api) -> None:
+@pytest.mark.parametrize("batch_size", [1, 2])
+@pytest.mark.parametrize("allow_overlaps", [True, False])
+def test_same_id_on_two_tracks_concurrently(api, batch_size, allow_overlaps) -> None:
+    api.send("PUT", f"/tracks/{TRACK_ID}/allow_overlaps", allow_overlaps, status=204)
     other = str(uuid4())
-    api.send("PUT", f"/tracks/{other}", {**api.track, "id": other}, status=201)
+    api.send(
+        "PUT",
+        f"/tracks/{other}",
+        {**api.track, "id": other, "allow_overlaps": allow_overlaps},
+        status=201,
+    )
     identifier = str(uuid4())
+    barrier = Barrier(2)
+    upsert = store.upsert_events
+
+    def race(db, track_id, records):
+        # Both requests must have read ownership before either can insert.
+        if records[0][0]["id"] == identifier:
+            barrier.wait(timeout=10)
+        return upsert(db, track_id, records)
 
     def post(path):
-        response = api.client.post(path, json=event(id=identifier))
-        return response.json()["responses"][0]["http_status_code"]
+        batch = [
+            event(id=identifier),
+            *[event("[1:0_2:0)") for _ in range(batch_size - 1)],
+        ]
+        response = api.send("POST", path, batch).json()
+        return [row["http_status_code"] for row in response["responses"]]
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    with patch.object(store, "upsert_events", race), ThreadPoolExecutor(2) as pool:
         codes = sorted(pool.map(post, [api.events, f"/tracks/{other}/events"]))
-    assert codes == [201, 400]
+    assert codes == [[201] * batch_size, [400] + [201] * (batch_size - 1)]
+    stored = [
+        record
+        for path in (api.events, f"/tracks/{other}/events")
+        for record in api.send("GET", path).json()
+    ]
+    assert len(stored) == batch_size * 2 - 1
+    assert sum(record["id"] == identifier for record in stored) == 1
 
 
 def test_coverage_and_track_filters_with_unbounded_events(api) -> None:

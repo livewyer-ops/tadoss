@@ -3,6 +3,8 @@
 from typing import Any, cast
 from uuid import uuid4
 
+from mediatimestamp.immutable import TimeRange
+
 from tadoss.adapters import postgres as store
 from tadoss.application import background
 from tadoss.domain.types import Document
@@ -42,14 +44,17 @@ def write_events(db: store.Database, track: Document, body: Any) -> Document:
             prepared.append({**incoming, "id": incoming.get("id", str(uuid4()))})
         except APIError as exc:
             prepared.append(exc)
+    identifiers = [record["id"] for record in prepared if isinstance(record, dict)]
     owners = dict(
         db.execute(
             "SELECT id,track_id FROM events WHERE id=ANY(%s)",
-            ([record["id"] for record in prepared if isinstance(record, dict)],),
+            (identifiers,),
         ).fetchall()
     )
+    # Duplicate IDs and overlap checks depend on earlier writes in the batch.
+    bulk = track["allow_overlaps"] and len(identifiers) == len(set(identifiers))
+    pending: list[tuple[Document, TimeRange]] = []
     responses: list[Document] = []
-    changed = False
     for record in prepared:
         result: Document = {}
         try:
@@ -69,15 +74,24 @@ def write_events(db: store.Database, track: Document, body: Any) -> Document:
             ):
                 raise APIError(400, "Event overlaps an existing event")
             record["timerange"] = str(timerange)
-            if not store.upsert_event(db, track["id"], record, timerange):
+            if bulk:
+                pending.append((record, timerange))
+            elif record["id"] not in store.upsert_events(
+                db, track["id"], [(record, timerange)]
+            ):
                 raise APIError(400, "Event ID already belongs to another track")
             result["http_status_code"] = 200 if existing else 201
             owners[record["id"]] = track["id"]
-            changed = True
         except APIError as exc:
             result.update(http_status_code=exc.status, error=exc.body)
         responses.append(result)
-    if changed:
+    if pending:
+        saved = store.upsert_events(db, track["id"], pending)
+        for result in responses:
+            if result["http_status_code"] < 300 and result["id"] not in saved:
+                error = APIError(400, "Event ID already belongs to another track")
+                result.update(http_status_code=error.status, error=error.body)
+    if any(result["http_status_code"] < 300 for result in responses):
         track["events_updated"] = now()
         store.save(db, "tracks", track)
     for status, event_type in (

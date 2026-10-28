@@ -1,5 +1,10 @@
 version: '3'
 tasks:
+  performance:
+    desc: Benchmark an isolated local API over HTTP with OAuth; CLI_ARGS selects workload and output
+    cmds:
+      - task: :dev:db
+      - uv run --project src --frozen python scripts/performance.py {{.CLI_ARGS}}
   fast:
     desc: Run checks that do not require PostgreSQL or Kubernetes
     cmds: ["uv run --project src --frozen pytest -c src/pyproject.toml -q tests/test_settings.py tests/test_environment.py tests/test_repository.py tests/test_contract.py tests/test_auth.py tests/test_documented_task_commands.py tests/test_chainsaw_native_policy.py tests/test_chainsaw_fixture_programmes.py tests/workers/test_worker_http_health.py tests/test_vendor_spec.py tests/test_support_bundle.py tests/test_release.py tests/test_webhook_delivery.py"]
