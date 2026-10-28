@@ -19,7 +19,7 @@ import (
 )
 
 func instance() *tadossv1.Tadoss {
-	return &tadossv1.Tadoss{ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "test", UID: types.UID("uid-1")}, Spec: tadossv1.TadossSpec{Version: "0.1.0-rc1", Profile: "local-kind", API: tadossv1.WorkloadSpec{Image: "livewyer/tadoss-api:test", ImagePullPolicy: corev1.PullIfNotPresent}, Backends: tadossv1.BackendsSpec{DB: tadossv1.DatabaseBackendSpec{ProvidedBy: "cnpg", CNPG: tadossv1.DatabaseSpec{Storage: "5Gi"}}}}}
+	return &tadossv1.Tadoss{ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "test", UID: types.UID("uid-1")}, Spec: tadossv1.TadossSpec{Version: "0.1.0-rc1", Profile: "local-kind", API: tadossv1.APIWorkloadSpec{WorkloadSpec: tadossv1.WorkloadSpec{Image: "livewyer/tadoss-api:test", ImagePullPolicy: corev1.PullIfNotPresent}}, Backends: tadossv1.BackendsSpec{DB: tadossv1.DatabaseBackendSpec{ProvidedBy: "cnpg", CNPG: tadossv1.DatabaseSpec{Storage: "5Gi"}}}}}
 }
 
 func TestProfilesAndCredentialRollouts(t *testing.T) {

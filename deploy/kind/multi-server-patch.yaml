@@ -1,0 +1,19 @@
+# Functional checks only. These allocations cannot establish production capacity.
+spec:
+  api:
+    resources:
+      requests: {cpu: 100m, memory: 256Mi}
+      limits: {cpu: '1', memory: 512Mi}
+  backends:
+    db:
+      cnpg:
+        storage: 5Gi
+        resources:
+          requests: {cpu: 250m, memory: 512Mi}
+          limits: {cpu: 250m, memory: 512Mi}
+        postgresql:
+          parameters:
+            shared_buffers: 128MB
+            effective_cache_size: 384MB
+            maintenance_work_mem: 64MB
+            max_wal_size: 1GB

@@ -1,3 +1,10 @@
 profile: multi-server
 baseDomain: tadoss.localtest.me
 ingressClassName: traefik
+monitoring:
+  enabled: true
+  labels:
+    monitoring.tadoss.livewyer.io/discovery: enabled
+  namespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: monitoring

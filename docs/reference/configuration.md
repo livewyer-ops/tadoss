@@ -9,8 +9,10 @@
 | `profile` | `local-kind`, `single-server`, or `multi-server` |
 | `publicEndpoint.baseDomain` | Derives `api.<instance>.<namespace>.<domain>` |
 | `api`, `worker` | Image, replicaCount, resources, env/envFrom, scheduling, pod/container security, volumes, probes and disruption budget |
+| `api.autoscaling` | Native HPA metrics/behaviour, min/max replicas; enabled autoscaling excludes `api.replicaCount` |
+| `monitoring` | Optional PodMonitors, alert rules, discovery labels and worker metrics namespace selector; inherits installation defaults |
 | `backends.db.providedBy` | `cnpg` or `external`; immutable after creation |
-| `backends.db.cnpg` | Image, instances, storage, resources, backup and new-instance restore |
+| `backends.db.cnpg` | Image, instances, storage, resources, native `postgresql` tuning/synchronous replication and `affinity`, transaction `pooler`, backup and new-instance restore |
 | `backends.db.external` | Existing Secret with `uri`; optional CA ConfigMap key |
 | `auth` | API token Secret, Basic credential Secret and OAuth2 verification settings |
 | `ingress` | Host, className, TLS Secret, clusterIssuer and annotations |
@@ -25,6 +27,8 @@ Certificates requested through `clusterIssuer` default to subject organization `
 
 Multi-server defaults to two API and worker replicas and three database instances. Other profiles default to one each. Network policies default on for multi-server; their enforcement requires a compatible CNI. Default egress permits DNS, PostgreSQL and HTTP(S); tighten destination rules for your installation.
 
+Multi-server managed databases default to required synchronous replication with one standby and failover quorum, and required node anti-affinity. The checked-in multi-server environment additionally enables HPA, pooling and monitoring, and sets larger explicit resource allocations. See the [reference settings and connection budget](../how-to/high-load.md); the generic workload defaults below still apply when no resources are supplied.
+
 ## Runtime settings
 
 [settings.py](../../src/app/tadoss/settings.py) defines all `TADOSS_` settings and defaults. Each accepts a `_FILE` alternative; setting both is an error. Invalid configuration reports the setting name without its value.
@@ -33,8 +37,8 @@ Multi-server defaults to two API and worker replicas and three database instance
 | --- | --- |
 | `TADOSS_DATABASE` | Required outside development mode |
 | `TADOSS_DATABASE_SSL_ROOT_CERT` | CA path; forces `sslmode=verify-full` |
-| `TADOSS_DATABASE_HOST` | Optional host override preserving URI credentials and TLS |
-| `TADOSS_METRICS_TOKEN` | Optional bearer credential valid only on `/metrics` |
+| `TADOSS_DATABASE_HOST` | Optional host override preserving URI credentials and TLS; managed API pooling sets this to the Pooler service |
+| `TADOSS_METRICS_TOKEN` | Optional bearer credential valid only on `/metrics`; managed monitoring generates a separate Secret |
 | `TADOSS_API_TOKEN` | Query token authentication |
 | `TADOSS_BASIC_AUTH_USERNAME`, `TADOSS_BASIC_AUTH_PASSWORD` | Username defaults to `tadoss`; password enables Basic |
 | `TADOSS_OAUTH2_ISSUER`, `TADOSS_OAUTH2_AUDIENCE`, `TADOSS_OAUTH2_JWKS_URI` | All required to enable JWT bearer verification |
@@ -92,6 +96,9 @@ JWT verification requires `exp`, `sub`, `iss` and `aud`; the nonempty `sub` is t
 | `DatabaseReady` | Managed database Pods are ready on the selected image and URI/CA inputs are available; an external database is not probed by the controller |
 | `SchemaMigrated` | The selected schema Job completed |
 | `APIReady`, `WorkerReady` | All replicas match the current Deployment generation and are available |
+| `AutoscalingReady` | HPA `ScalingActive`; missing metrics do not stop existing API replicas |
+| `PoolerReady` | CNPG Pooler Deployment rollout is complete, or pooling is disabled |
+| `MonitoringReady` | Integration resources configured; actual scrape discovery is checked by qualification; missing APIs do not stop the serving API |
 | `BackupPolicyReady` | CNPG has reported a successful backup; `NotConfigured` when disabled; absent for external databases |
 
 Missing token, Basic or workload Secret inputs appear as `TokenSecretMissing`, `TokenSecretInvalid`, `BasicSecretInvalid` or `ReferencedSecretMissing` on `Ready`. Conditions are reconciliation progress; backup readiness does not gate the API becoming Ready. See [operations](../how-to/operations.md) for recovery actions.

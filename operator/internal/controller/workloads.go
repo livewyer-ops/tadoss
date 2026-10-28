@@ -11,11 +11,13 @@ import (
 
 	operatorstatus "github.com/livewyer-ops/tadoss/operator/internal/status"
 
+	cnpgv1 "github.com/cloudnative-pg/cloudnative-pg/api/v1"
 	tadossv1 "github.com/livewyer-ops/tadoss/operator/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
@@ -24,6 +26,12 @@ import (
 )
 
 func (r *TadossReconciler) reconcileWorkloads(ctx context.Context, t *tadossv1.Tadoss, currentJob string, credentials *credentials) (ctrl.Result, error) {
+	if err := r.reconcilePooler(ctx, t); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.reconcileAutoscaling(ctx, t); err != nil {
+		return ctrl.Result{}, err
+	}
 	set := workloads(t, credentials.database.Name, t.Status.TokenSecret, referenceFingerprint(credentials.workloadReferences...))
 	for _, object := range set.objects() {
 		if err := r.apply(ctx, t, object); err != nil {
@@ -33,6 +41,7 @@ func (r *TadossReconciler) reconcileWorkloads(ctx context.Context, t *tadossv1.T
 	if err := r.prune(ctx, t, currentJob, set); err != nil {
 		return ctrl.Result{}, err
 	}
+	r.reconcileMonitoring(ctx, t)
 	deployment := set.Deployment
 	t.Status.ReadyReplicas = deployment.Status.ReadyReplicas
 	t.Status.Endpoint = fmt.Sprintf("http://%s%s.%s.svc:%d", t.Name, suffixAPI, t.Namespace, apiPort)
@@ -43,13 +52,28 @@ func (r *TadossReconciler) reconcileWorkloads(ctx context.Context, t *tadossv1.T
 		}
 		t.Status.Endpoint = scheme + "://" + t.Spec.Ingress.Host
 	}
-	apiReady := deploymentReady(deployment, replicas(t))
+	desiredReplicas := replicas(t)
+	if t.Spec.API.Autoscaling.Enabled {
+		desiredReplicas = ptr.Deref(deployment.Spec.Replicas, 1)
+	}
+	apiReady := deploymentReady(deployment, desiredReplicas)
 	operatorstatus.SetConditionBool(&t.Status.Conditions, t.Generation, "APIReady", apiReady, "Rollout", "API rollout must finish")
 	workerReady := deploymentReady(set.Worker, *set.Worker.Spec.Replicas)
 	t.Status.WorkerReadyReplicas = set.Worker.Status.ReadyReplicas
 	operatorstatus.SetConditionBool(&t.Status.Conditions, t.Generation, "WorkerReady", workerReady, "Rollout", "Worker rollout must finish")
-	if !apiReady || !workerReady {
-		return r.pending(ctx, t, "RolloutPending", "Waiting for API and worker rollouts")
+	if !apiReady || !workerReady || !meta.IsStatusConditionTrue(t.Status.Conditions, "PoolerReady") {
+		return r.pending(ctx, t, "RolloutPending", "Waiting for API, worker and Pooler rollouts")
+	}
+	if !t.Spec.Backends.DB.CNPG.Pooler.Enabled {
+		object, err := r.owned(ctx, t, client.ObjectKey{Namespace: t.Namespace, Name: t.Name + "-pooler"}, &cnpgv1.Pooler{})
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if object != nil {
+			if err := r.Delete(ctx, object); client.IgnoreNotFound(err) != nil {
+				return ctrl.Result{}, err
+			}
+		}
 	}
 	t.Status.CurrentVersion = t.Spec.Version
 	t.Status.PendingVersion = ""
@@ -102,6 +126,15 @@ func workloads(t *tadossv1.Tadoss, databaseSecret, tokenSecret, checksum string)
 		Deployment: &appsv1.Deployment{TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"}, ObjectMeta: metadata(t, suffixAPI), Spec: appsv1.DeploymentSpec{Replicas: ptr.To(replicas(t)), Selector: selector, Template: template}},
 		Service:    &corev1.Service{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Service"}, ObjectMeta: metadata(t, suffixAPI), Spec: corev1.ServiceSpec{Selector: selectorLabels(t), Ports: []corev1.ServicePort{{Name: "http", Port: apiPort, TargetPort: intstr.FromString("http")}}}},
 	}
+	if t.Spec.API.Autoscaling.Enabled {
+		set.Deployment.Spec.Replicas = nil
+	}
+	if t.Spec.Backends.DB.CNPG.Pooler.Enabled {
+		setContainerEnv(&set.Deployment.Spec.Template.Spec.Containers[0], corev1.EnvVar{Name: "TADOSS_DATABASE_HOST", Value: t.Name + "-pooler." + t.Namespace + ".svc"})
+	}
+	if ptr.Deref(t.Spec.Monitoring.Enabled, false) {
+		setContainerEnv(&set.Deployment.Spec.Template.Spec.Containers[0], secretKeyEnv("TADOSS_METRICS_TOKEN", t.Name+"-metrics", "token"))
+	}
 	if replicas(t) > 1 {
 		set.Budget = &policyv1.PodDisruptionBudget{TypeMeta: metav1.TypeMeta{APIVersion: "policy/v1", Kind: "PodDisruptionBudget"}, ObjectMeta: metadata(t, suffixAPI), Spec: policyv1.PodDisruptionBudgetSpec{MinAvailable: ptr.To(intstr.FromInt32(1)), Selector: selector}}
 	}
@@ -134,7 +167,7 @@ func workloads(t *tadossv1.Tadoss, databaseSecret, tokenSecret, checksum string)
 		set.Ingress = ingress
 	}
 	workerInstance := t.DeepCopy()
-	workerInstance.Spec.API = t.Spec.Worker
+	workerInstance.Spec.API = tadossv1.APIWorkloadSpec{WorkloadSpec: t.Spec.Worker}
 	workerTemplate := pod(workerInstance, databaseSecret, tokenSecret)
 	workerTemplate.Labels["app.kubernetes.io/component"] = "worker"
 	if workerTemplate.Annotations == nil {
@@ -145,6 +178,9 @@ func workloads(t *tadossv1.Tadoss, databaseSecret, tokenSecret, checksum string)
 	workerContainer.Name = "worker"
 	workerContainer.Command = []string{"tadoss", "worker"}
 	workerContainer.Env = slices.DeleteFunc(workerContainer.Env, apiAuthEnv)
+	if t.Spec.Backends.DB.CNPG.Pooler.Enabled {
+		setContainerEnv(workerContainer, corev1.EnvVar{Name: "TADOSS_DATABASE_HOST", Value: ""})
+	}
 	workerContainer.Ports = []corev1.ContainerPort{{Name: "http", ContainerPort: 8001}}
 	workerSelector := &metav1.LabelSelector{MatchLabels: maps.Clone(selector.MatchLabels)}
 	workerSelector.MatchLabels["app.kubernetes.io/component"] = "worker"
@@ -172,6 +208,12 @@ func networkPolicy(t *tadossv1.Tadoss, component string, selector map[string]str
 	ingress, egress := rules.Ingress, rules.Egress
 	if ingress == nil && component == "api" {
 		ingress = []networkingv1.NetworkPolicyIngressRule{{Ports: []networkingv1.NetworkPolicyPort{{Port: ptr.To(intstr.FromInt32(8000))}}}}
+	}
+	if ptr.Deref(t.Spec.Monitoring.Enabled, false) && component == "worker" {
+		ingress = append(slices.Clone(ingress), networkingv1.NetworkPolicyIngressRule{
+			From:  []networkingv1.NetworkPolicyPeer{{NamespaceSelector: t.Spec.Monitoring.NamespaceSelector}},
+			Ports: []networkingv1.NetworkPolicyPort{{Port: ptr.To(intstr.FromInt32(8001))}},
+		})
 	}
 	if egress == nil {
 		egress = []networkingv1.NetworkPolicyEgressRule{{Ports: []networkingv1.NetworkPolicyPort{{Protocol: ptr.To(corev1.ProtocolUDP), Port: ptr.To(intstr.FromInt32(53))}, {Protocol: ptr.To(corev1.ProtocolTCP), Port: ptr.To(intstr.FromInt32(53))}, {Port: ptr.To(intstr.FromInt32(5432))}, {Port: ptr.To(intstr.FromInt32(443))}, {Port: ptr.To(intstr.FromInt32(80))}}}}

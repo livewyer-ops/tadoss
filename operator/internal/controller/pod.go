@@ -92,7 +92,7 @@ func pod(t *tadossv1.Tadoss, databaseSecret, tokenSecret string) corev1.PodTempl
 	if t.Status.Resolved.SchemaTarget != "" {
 		container.Env = append(container.Env, corev1.EnvVar{Name: "TADOSS_SCHEMA_TARGET", Value: t.Status.Resolved.SchemaTarget})
 	}
-	applyWorkload(&template, t.Spec.API)
+	applyWorkload(&template, t.Spec.API.WorkloadSpec)
 	return template
 
 }
@@ -135,7 +135,14 @@ func applyWorkload(template *corev1.PodTemplateSpec, config tadossv1.WorkloadSpe
 }
 
 func apiAuthEnv(env corev1.EnvVar) bool {
-	return env.Name == "TADOSS_API_TOKEN" || env.Name == "TADOSS_API_TOKEN_FILE" || strings.HasPrefix(env.Name, "TADOSS_BASIC_") || strings.HasPrefix(env.Name, "TADOSS_OAUTH2_")
+	return env.Name == "TADOSS_API_TOKEN" || env.Name == "TADOSS_API_TOKEN_FILE" || strings.HasPrefix(env.Name, "TADOSS_METRICS_TOKEN") || strings.HasPrefix(env.Name, "TADOSS_BASIC_") || strings.HasPrefix(env.Name, "TADOSS_OAUTH2_")
+}
+
+func setContainerEnv(container *corev1.Container, value corev1.EnvVar) {
+	container.Env = slices.DeleteFunc(container.Env, func(existing corev1.EnvVar) bool {
+		return existing.Name == value.Name || existing.Name == value.Name+"_FILE"
+	})
+	container.Env = append(container.Env, value)
 }
 
 func literalEnv(env map[string]string, excluded ...string) []corev1.EnvVar {

@@ -8,10 +8,14 @@ from pathlib import Path
 KINDS = (
     "tadosses",
     "deployments",
+    "horizontalpodautoscalers",
     "jobs",
     "pods",
     "clusters.postgresql.cnpg.io",
     "scheduledbackups.postgresql.cnpg.io",
+    "poolers.postgresql.cnpg.io",
+    "podmonitors.monitoring.coreos.com",
+    "prometheusrules.monitoring.coreos.com",
 )
 STATUS_FIELDS = (
     "phase",
@@ -19,6 +23,11 @@ STATUS_FIELDS = (
     "readyReplicas",
     "updatedReplicas",
     "availableReplicas",
+    "currentReplicas",
+    "desiredReplicas",
+    "readyInstances",
+    "currentPrimary",
+    "targetPrimary",
     "workerReadyReplicas",
     "currentVersion",
     "pendingVersion",

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -40,6 +41,11 @@ func applyManagedObject(ctx context.Context, c client.Client, desired client.Obj
 			return applyResult{Changed: true, Created: true}, applyObjectPatch(ctx, c, desired)
 		}
 		return applyResult{}, err
+	}
+	if deployment, ok := desired.(*appsv1.Deployment); ok && deployment.Spec.Replicas == nil {
+		if err := releaseReplicaOwnership(ctx, c, live.(*appsv1.Deployment)); err != nil {
+			return applyResult{}, err
+		}
 	}
 	if err := reclaimAuthoritativeFields(ctx, c, live); err != nil {
 		return applyResult{}, err

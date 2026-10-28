@@ -8,6 +8,7 @@
 
 - [Authentication and secret rotation](how-to/authentication.md)
 - [Scaling, pausing, isolation and network policy](how-to/operations.md)
+- [Multi-server performance qualification](how-to/high-load.md)
 - [Backup and recovery](how-to/backup-recovery.md)
 - [Troubleshooting and support bundles](how-to/troubleshooting.md)
 - [Release a version](how-to/releasing.md)

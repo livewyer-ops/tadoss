@@ -6,9 +6,11 @@
   "runtimeRepository": "livewyer/tadoss-api",
   "operatorRepository": "livewyer/tadoss-operator",
   "platformCharts": {
-    "cloudnative-pg": "0.28.2",
+    "cloudnative-pg": "0.29.1",
     "traefik": "40.2.0",
     "cert-manager": "v1.20.2",
-    "authentik": "2026.5.6"
+    "authentik": "2026.5.6",
+    "metrics-server": "3.13.0",
+    "kube-prometheus-stack": "83.4.0"
   }
 }

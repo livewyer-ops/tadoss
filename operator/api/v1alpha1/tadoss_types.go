@@ -2,6 +2,7 @@ package v1alpha1
 
 import (
 	cnpgv1 "github.com/cloudnative-pg/cloudnative-pg/api/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -38,10 +39,27 @@ type DatabaseSpec struct {
 	StorageClass *string `json:"storageClass,omitempty"`
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=5
-	Instances *int32                      `json:"instances,omitempty"`
-	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
-	Backup    BackupSpec                  `json:"backup,omitempty"`
-	Restore   RestoreSpec                 `json:"restore,omitempty"`
+	Instances  *int32                        `json:"instances,omitempty"`
+	Resources  corev1.ResourceRequirements   `json:"resources,omitempty"`
+	Backup     BackupSpec                    `json:"backup,omitempty"`
+	Restore    RestoreSpec                   `json:"restore,omitempty"`
+	Postgresql cnpgv1.PostgresConfiguration  `json:"postgresql,omitempty"`
+	Affinity   *cnpgv1.AffinityConfiguration `json:"affinity,omitempty"`
+	Pooler     PoolerSpec                    `json:"pooler,omitempty"`
+}
+
+// PoolerSpec bounds API server connections across a CNPG transaction pool.
+type PoolerSpec struct {
+	Enabled bool `json:"enabled,omitempty"`
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=8
+	Instances *int32 `json:"instances,omitempty"`
+	// ServerConnections is the maximum per Pooler pod for the application database.
+	// +kubebuilder:validation:Minimum=1
+	ServerConnections *int32 `json:"serverConnections,omitempty"`
+	// +kubebuilder:validation:Minimum=1
+	MaxClientConnections *int32                      `json:"maxClientConnections,omitempty"`
+	Resources            corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
 // BackupSpec configures scheduled native CNPG object-store backups.
@@ -134,6 +152,32 @@ type WorkloadSpec struct {
 	MinAvailable       *intstr.IntOrString         `json:"minAvailable,omitempty"`
 }
 
+// APIWorkloadSpec adds autoscaling to the API; worker concurrency remains explicit.
+// +kubebuilder:validation:XValidation:rule="!has(self.autoscaling) || !has(self.autoscaling.enabled) || !self.autoscaling.enabled || !has(self.replicaCount)",message="replicaCount and enabled autoscaling are mutually exclusive"
+type APIWorkloadSpec struct {
+	WorkloadSpec `json:",inline"`
+	Autoscaling  AutoscalingSpec `json:"autoscaling,omitempty"`
+}
+
+// AutoscalingSpec configures a native HorizontalPodAutoscaler for the API.
+type AutoscalingSpec struct {
+	Enabled bool `json:"enabled,omitempty"`
+	// +kubebuilder:validation:Minimum=1
+	MinReplicas *int32 `json:"minReplicas,omitempty"`
+	// +kubebuilder:validation:Minimum=1
+	MaxReplicas *int32                                         `json:"maxReplicas,omitempty"`
+	Metrics     []autoscalingv2.MetricSpec                     `json:"metrics,omitempty"`
+	Behavior    *autoscalingv2.HorizontalPodAutoscalerBehavior `json:"behavior,omitempty"`
+}
+
+// MonitoringSpec integrates with an existing Prometheus Operator installation.
+type MonitoringSpec struct {
+	Enabled *bool             `json:"enabled,omitempty"`
+	Labels  map[string]string `json:"labels,omitempty"`
+	// NamespaceSelector restricts metrics ingress to the monitoring namespaces.
+	NamespaceSelector *metav1.LabelSelector `json:"namespaceSelector,omitempty"`
+}
+
 // OAuth2Spec configures JWT verification and operation scopes.
 // +kubebuilder:validation:XValidation:rule="(has(self.issuer) && has(self.audience) && has(self.jwksURI)) || (!has(self.issuer) && !has(self.audience) && !has(self.jwksURI))",message="issuer, audience and jwksURI must be supplied together"
 type OAuth2Spec struct {
@@ -194,13 +238,14 @@ type TadossSpec struct {
 	Profile        string             `json:"profile,omitempty"`
 	Paused         bool               `json:"paused,omitempty"`
 	PublicEndpoint PublicEndpointSpec `json:"publicEndpoint,omitempty"`
-	API            WorkloadSpec       `json:"api,omitempty"`
+	API            APIWorkloadSpec    `json:"api,omitempty"`
 	Worker         WorkloadSpec       `json:"worker,omitempty"`
 	// +kubebuilder:default={db:{providedBy:cnpg}}
 	Backends         BackendsSpec                  `json:"backends,omitempty"`
 	Auth             AuthSpec                      `json:"auth,omitempty"`
 	Ingress          IngressSpec                   `json:"ingress,omitempty"`
 	NetworkPolicy    NetworkPolicySpec             `json:"networkPolicy,omitempty"`
+	Monitoring       MonitoringSpec                `json:"monitoring,omitempty"`
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 	SchemaRetryNonce string                        `json:"schemaRetryNonce,omitempty"`
 	// +kubebuilder:validation:Enum=Retain;Delete

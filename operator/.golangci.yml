@@ -22,6 +22,9 @@ linters:
       # This annotation is part of cert-manager's public API.
       - linters: [misspell]
         source: 'cert-manager\.io/subject-organizations'
+      # Native HPA field names follow the Kubernetes API spelling.
+      - linters: [misspell]
+        source: 'Behavior'
 formatters:
   enable:
     - gofmt

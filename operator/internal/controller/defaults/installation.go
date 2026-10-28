@@ -19,12 +19,13 @@ import (
 
 // Installation contains defaults shared by instances managed by this operator.
 type Installation struct {
-	Profile          string `json:"profile"`
-	BaseDomain       string `json:"baseDomain"`
-	IngressClassName string `json:"ingressClassName"`
-	ClusterIssuer    string `json:"clusterIssuer"`
-	Revision         string `json:"-"`
-	Error            string `json:"-"`
+	Profile          string                  `json:"profile"`
+	BaseDomain       string                  `json:"baseDomain"`
+	IngressClassName string                  `json:"ingressClassName"`
+	ClusterIssuer    string                  `json:"clusterIssuer"`
+	Revision         string                  `json:"-"`
+	Error            string                  `json:"-"`
+	Monitoring       tadossv1.MonitoringSpec `json:"monitoring,omitempty"`
 }
 
 // Load validates a defaults file and records its content revision.
@@ -141,7 +142,10 @@ func Resolve(t *tadossv1.Tadoss, installation Installation) error {
 	if t.Spec.DeletionPolicy == "" {
 		t.Spec.DeletionPolicy = tadossv1.DeletionPolicyRetain
 	}
-	for _, workload := range []tadossv1.WorkloadSpec{t.Spec.API, t.Spec.Worker} {
+	if err := highLoad(t, installation); err != nil {
+		return err
+	}
+	for _, workload := range []tadossv1.WorkloadSpec{t.Spec.API.WorkloadSpec, t.Spec.Worker} {
 		if strings.Contains(workload.Image, ":sha256:") {
 			return fmt.Errorf("image digests must use repository@sha256:digest")
 		}

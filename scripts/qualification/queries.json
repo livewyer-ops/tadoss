@@ -1,0 +1,12 @@
+{
+  "requests": "sum by (status) (rate(tadoss_http_requests_total{namespace=\"$namespace\",tadoss_instance=\"$instance\",route!~\"/(healthz|readyz|metrics)\"}[1m]))",
+  "latency_p99": "histogram_quantile(0.99, sum by (le) (rate(tadoss_http_request_seconds_bucket{namespace=\"$namespace\",tadoss_instance=\"$instance\"}[1m])))",
+  "cpu": "sum by (pod,container) (rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container!=\"\"}[1m]))",
+  "rss": "container_memory_rss{namespace=\"$namespace\",container!=\"\"}",
+  "throttling": "sum by (pod,container) (rate(container_cpu_cfs_throttled_seconds_total{namespace=\"$namespace\",container!=\"\"}[1m]))",
+  "admission": "tadoss_database_waiting{namespace=\"$namespace\",tadoss_instance=\"$instance\"}",
+  "queue": "tadoss_queue_oldest_seconds{namespace=\"$namespace\",tadoss_instance=\"$instance\"}",
+  "replication": "cnpg_pg_replication_lag{namespace=\"$namespace\",tadoss_instance=\"$instance\"}",
+  "pooler_wait": "cnpg_pgbouncer_pools_cl_waiting{namespace=\"$namespace\",tadoss_instance=\"$instance\"}",
+  "targets": "up{namespace=\"$namespace\",tadoss_instance=\"$instance\"}"
+}

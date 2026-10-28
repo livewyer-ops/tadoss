@@ -1,0 +1,25 @@
+grafana:
+  defaultDashboardsTimezone: utc
+  sidecar:
+    dashboards:
+      searchNamespace: ALL
+prometheus:
+  prometheusSpec:
+    retention: 7d
+    scrapeInterval: 15s
+    evaluationInterval: 15s
+    podMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelector:
+      matchLabels:
+        monitoring.tadoss.livewyer.io/discovery: enabled
+    podMonitorNamespaceSelector: {}
+    ruleSelectorNilUsesHelmValues: false
+    ruleSelector: {}
+    ruleNamespaceSelector: {}
+    resources:
+      requests: {cpu: 500m, memory: 1Gi}
+      limits: {memory: 4Gi}
+alertmanager:
+  enabled: true
+# Set persistent storage and Alertmanager receivers in the environment before
+# using this stack for operations; the reference install is disposable.

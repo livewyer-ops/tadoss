@@ -5,6 +5,7 @@ import (
 
 	cnpgv1 "github.com/cloudnative-pg/cloudnative-pg/api/v1"
 	tadossv1 "github.com/livewyer-ops/tadoss/operator/api/v1alpha1"
+	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -20,6 +21,7 @@ func newCanonicalKindScheme() *runtime.Scheme {
 	utilruntime.Must(clientgoscheme.AddToScheme(kindScheme))
 	utilruntime.Must(tadossv1.AddToScheme(kindScheme))
 	utilruntime.Must(cnpgv1.AddToScheme(kindScheme))
+	utilruntime.Must(monitoringv1.AddToScheme(kindScheme))
 	return kindScheme
 }
 

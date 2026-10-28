@@ -33,6 +33,10 @@ tasks:
           OPERATOR_BASE=$(realpath --relative-to={{.KIND_ENV | shellQuote}}/operator {{.ROOT_DIR | shellQuote}}/deploy/operator) \
             yq -i '.resources = [strenv(OPERATOR_BASE)]' {{.KIND_ENV | shellQuote}}/operator/kustomization.yaml
           yq -i '.clusterIssuer = "tadoss-selfsigned"' {{.KIND_ENV | shellQuote}}/operator/defaults.yaml
+          if [ {{.PROFILE | shellQuote}} = multi-server ]; then
+            yq -i '. *= load("deploy/kind/multi-server-patch.yaml")' {{.KIND_ENV | shellQuote}}/instances/tadoss/tadoss.yaml
+            yq -i '.platform.metricsServer.enabled = true | .platform.metricsServer.values.args = ["--kubelet-insecure-tls"] | .platform.monitoring.enabled = true' {{.KIND_ENV | shellQuote}}/platform-values.yaml
+          fi
         fi
       - cd {{.KIND_ENV | shellQuote}}/operator && kustomize edit set image {{printf "livewyer/tadoss-operator=%s" .KIND_OPERATOR_IMAGE | shellQuote}}
       - |

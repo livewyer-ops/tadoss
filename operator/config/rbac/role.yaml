@@ -68,6 +68,18 @@ rules:
   verbs:
   - create
 - apiGroups:
+  - autoscaling
+  resources:
+  - horizontalpodautoscalers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - batch
   resources:
   - jobs
@@ -77,6 +89,19 @@ rules:
   - get
   - list
   - patch
+  - watch
+- apiGroups:
+  - monitoring.coreos.com
+  resources:
+  - podmonitors
+  - prometheusrules
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - networking.k8s.io
@@ -107,6 +132,7 @@ rules:
   - postgresql.cnpg.io
   resources:
   - clusters
+  - poolers
   - scheduledbackups
   verbs:
   - create

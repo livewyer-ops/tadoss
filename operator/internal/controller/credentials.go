@@ -45,6 +45,13 @@ func (r *TadossReconciler) reconcileCredentials(ctx context.Context, t *tadossv1
 	t.Status.DatabaseSecret, t.Status.TokenSecret = database.Name, ""
 	databaseReferences := []client.Object{database}
 	credentialReferences := []client.Object{database}
+	if ptr.Deref(t.Spec.Monitoring.Enabled, false) {
+		metricsSecret, err := r.tokenSecret(ctx, t, t.Name+"-metrics", true)
+		if err != nil {
+			return nil, ctrl.Result{}, err
+		}
+		credentialReferences = append(credentialReferences, metricsSecret)
+	}
 	if token != nil {
 		t.Status.TokenSecret = token.Name
 		credentialReferences = append(credentialReferences, token)
@@ -113,6 +120,10 @@ func (r *TadossReconciler) token(ctx context.Context, t *tadossv1.Tadoss) (*core
 	if generated {
 		name = t.Name + suffixToken
 	}
+	return r.tokenSecret(ctx, t, name, generated)
+}
+
+func (r *TadossReconciler) tokenSecret(ctx context.Context, t *tadossv1.Tadoss, name string, generated bool) (*corev1.Secret, error) {
 	secret := &corev1.Secret{}
 	err := r.Get(ctx, client.ObjectKey{Namespace: t.Namespace, Name: name}, secret)
 	if err == nil {
@@ -139,6 +150,7 @@ func (r *TadossReconciler) token(ctx context.Context, t *tadossv1.Tadoss) (*core
 		return nil, err
 	}
 	secret = &corev1.Secret{ObjectMeta: metadata(t, suffixToken), Data: map[string][]byte{"token": value}}
+	secret.Name = name
 	if err := controllerutil.SetControllerReference(t, secret, r.Scheme); err != nil {
 		return nil, err
 	}
@@ -159,7 +171,7 @@ func referencedSecrets(t *tadossv1.Tadoss) map[string]bool {
 	if ptr.Deref(t.Spec.Auth.TokenEnabled, true) {
 		required[t.Spec.Auth.TokenSecret] = true
 	}
-	for _, workload := range []tadossv1.WorkloadSpec{t.Spec.API, t.Spec.Worker} {
+	for _, workload := range []tadossv1.WorkloadSpec{t.Spec.API.WorkloadSpec, t.Spec.Worker} {
 		for _, source := range workload.EnvFrom {
 			if source.SecretRef != nil {
 				name := source.SecretRef.Name

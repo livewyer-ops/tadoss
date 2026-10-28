@@ -1,0 +1,84 @@
+name: Cluster performance
+on:
+  workflow_dispatch:
+    inputs:
+      namespace:
+        description: Preconfigured disposable qualification namespace
+        required: true
+        type: string
+      instance:
+        description: Tadoss instance name
+        default: tadoss
+        type: string
+      prometheus_url:
+        description: Prometheus URL reachable from the dedicated runner
+        required: true
+        type: string
+      rate:
+        description: Offered requests per second
+        default: '20'
+        type: string
+      workload:
+        description: Workload for the fixed replica and HPA comparison
+        type: choice
+        options: [mixed, read-page, read-range, insert, update, hot, no-overlap]
+      batch:
+        description: Events per write request
+        type: choice
+        options: ['1', '100', '1000']
+      events:
+        description: Seeded events per track (use a fresh disposable target)
+        default: '1000'
+        type: string
+      payload_bytes:
+        description: Text payload bytes (complete batches must fit 1 MiB)
+        default: '64'
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: qualification-${{ inputs.namespace }}-${{ inputs.instance }}
+  cancel-in-progress: false
+jobs:
+  qualify:
+    runs-on: [self-hosted, linux, tadoss-qualification]
+    environment: performance-qualification
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+      - uses: ./.github/actions/setup
+      - run: task setup
+      - name: Qualify the prepared disposable target
+        env:
+          QUAL_KUBECONFIG: ${{ secrets.QUALIFICATION_KUBECONFIG_BASE64 }}
+          QUAL_CA: ${{ secrets.QUALIFICATION_CA_BASE64 }}
+          QUAL_NAMESPACE: ${{ inputs.namespace }}
+          QUAL_INSTANCE: ${{ inputs.instance }}
+          QUAL_PROMETHEUS: ${{ inputs.prometheus_url }}
+          QUAL_RATE: ${{ inputs.rate }}
+          QUAL_WORKLOAD: ${{ inputs.workload }}
+          QUAL_BATCH: ${{ inputs.batch }}
+          QUAL_EVENTS: ${{ inputs.events }}
+          QUAL_PAYLOAD: ${{ inputs.payload_bytes }}
+        shell: bash
+        run: |
+          umask 077
+          mkdir -p .local
+          printf '%s' "$QUAL_KUBECONFIG" | base64 -d > .local/qualification.kubeconfig
+          trap 'rm -f .local/qualification.kubeconfig .local/qualification-ca.pem' EXIT
+          trust=()
+          if [ -n "$QUAL_CA" ]; then
+            printf '%s' "$QUAL_CA" | base64 -d > .local/qualification-ca.pem
+            trust=(--ca-file .local/qualification-ca.pem)
+          fi
+          target=(--kubeconfig .local/qualification.kubeconfig --namespace "$QUAL_NAMESPACE" --instance "$QUAL_INSTANCE" --prometheus-url "$QUAL_PROMETHEUS" --tier dedicated --fixture .local/qualification-ci.json)
+          uv run --project src --frozen python scripts/qualify.py seed "${target[@]}" "${trust[@]}" --events "$QUAL_EVENTS" --payload-bytes "$QUAL_PAYLOAD" --webhook-url fixture --output reports/qualification/seed
+          uv run --project src --frozen python scripts/qualify.py matrix "${target[@]}" "${trust[@]}" --rate "$QUAL_RATE" --workload "$QUAL_WORKLOAD" --batch "$QUAL_BATCH" --payload-bytes "$QUAL_PAYLOAD" --output reports/qualification/matrix
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: cluster-performance-${{ github.run_id }}
+          path: reports/qualification
+          if-no-files-found: warn

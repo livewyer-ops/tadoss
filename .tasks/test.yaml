@@ -1,5 +1,9 @@
 version: '3'
 tasks:
+  cluster:
+    desc: Qualify a disposable cluster instance with HTTPS, OAuth and open arrival-rate k6 workloads
+    cmds:
+      - uv run --project src --frozen python scripts/qualify.py {{.CLI_ARGS}}
   performance:
     desc: Benchmark an isolated local API over HTTP with OAuth; CLI_ARGS selects workload and output
     cmds:

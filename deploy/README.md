@@ -1,6 +1,6 @@
 # Deployment
 
-`platform/helmfile.yaml.gotmpl` manages shared CNPG, Traefik and cert-manager installations and the optional issuer chart. `operator/` is a native Kustomize installation. Each directory in `environments/` contains:
+`platform/helmfile.yaml.gotmpl` manages selected CNPG, Traefik and cert-manager installations, the optional issuer chart, Metrics Server and the optional monitoring stack. Shared installations can be reused without Helm changes. See the [high-load guide](../docs/how-to/high-load.md) for multi-server settings, platform ownership checks and qualification. `operator/` is a native Kustomize installation. Each directory in `environments/` contains:
 
 ```text
 platform-values.yaml

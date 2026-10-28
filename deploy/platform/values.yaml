@@ -1,5 +1,11 @@
 platform:
   timeoutSeconds: 600
+  metricsServer:
+    enabled: false
+    values: {}
+  monitoring:
+    enabled: false
+    values: {}
   cnpg:
     enabled: true
     values:
