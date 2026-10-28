@@ -1,2 +1,7 @@
 tls:
   mode: existing
+platform:
+  metricsServer:
+    enabled: true
+  monitoring:
+    enabled: true

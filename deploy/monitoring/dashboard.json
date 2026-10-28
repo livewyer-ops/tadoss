@@ -1,0 +1,226 @@
+{
+  "uid": "tadoss-performance",
+  "title": "TADOSS performance",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "15s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus"
+      },
+      {
+        "name": "namespace",
+        "type": "query",
+        "datasource": "${datasource}",
+        "query": "label_values(tadoss_http_requests_total, namespace)",
+        "refresh": 1
+      },
+      {
+        "name": "instance",
+        "type": "query",
+        "datasource": "${datasource}",
+        "query": "label_values(tadoss_http_requests_total{namespace=\"$namespace\"}, tadoss_instance)",
+        "refresh": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "requests",
+      "type": "timeseries",
+      "datasource": "${datasource}",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (status) (rate(tadoss_http_requests_total{namespace=\"$namespace\",tadoss_instance=\"$instance\",route!~\"/(healthz|readyz|metrics)\"}[1m]))",
+          "legendFormat": "{{pod}} {{container}} {{status}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "latency p99",
+      "type": "timeseries",
+      "datasource": "${datasource}",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(tadoss_http_request_seconds_bucket{namespace=\"$namespace\",tadoss_instance=\"$instance\"}[1m])))",
+          "legendFormat": "{{pod}} {{container}} {{status}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "cpu",
+      "type": "timeseries",
+      "datasource": "${datasource}",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (pod,container) (rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container!=\"\"}[1m]))",
+          "legendFormat": "{{pod}} {{container}} {{status}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "rss",
+      "type": "timeseries",
+      "datasource": "${datasource}",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "container_memory_rss{namespace=\"$namespace\",container!=\"\"}",
+          "legendFormat": "{{pod}} {{container}} {{status}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "throttling",
+      "type": "timeseries",
+      "datasource": "${datasource}",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (pod,container) (rate(container_cpu_cfs_throttled_seconds_total{namespace=\"$namespace\",container!=\"\"}[1m]))",
+          "legendFormat": "{{pod}} {{container}} {{status}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "admission",
+      "type": "timeseries",
+      "datasource": "${datasource}",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "tadoss_database_waiting{namespace=\"$namespace\",tadoss_instance=\"$instance\"}",
+          "legendFormat": "{{pod}} {{container}} {{status}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "queue",
+      "type": "timeseries",
+      "datasource": "${datasource}",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "tadoss_queue_oldest_seconds{namespace=\"$namespace\",tadoss_instance=\"$instance\"}",
+          "legendFormat": "{{pod}} {{container}} {{status}}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "replication",
+      "type": "timeseries",
+      "datasource": "${datasource}",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "cnpg_pg_replication_lag{namespace=\"$namespace\",tadoss_instance=\"$instance\"}",
+          "legendFormat": "{{pod}} {{container}} {{status}}"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "pooler wait",
+      "type": "timeseries",
+      "datasource": "${datasource}",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 32
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "cnpg_pgbouncer_pools_cl_waiting{namespace=\"$namespace\",tadoss_instance=\"$instance\"}",
+          "legendFormat": "{{pod}} {{container}} {{status}}"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "targets",
+      "type": "timeseries",
+      "datasource": "${datasource}",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 32
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "up{namespace=\"$namespace\",tadoss_instance=\"$instance\"}",
+          "legendFormat": "{{pod}} {{container}} {{status}}"
+        }
+      ]
+    }
+  ]
+}

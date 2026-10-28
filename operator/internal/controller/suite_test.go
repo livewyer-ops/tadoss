@@ -14,6 +14,7 @@ import (
 	cnpgv1 "github.com/cloudnative-pg/cloudnative-pg/api/v1"
 	"github.com/go-logr/logr"
 	tadossv1 "github.com/livewyer-ops/tadoss/operator/api/v1alpha1"
+	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -47,7 +48,7 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	scheme := runtime.NewScheme()
-	for _, add := range []func(*runtime.Scheme) error{clientgoscheme.AddToScheme, tadossv1.AddToScheme, cnpgv1.AddToScheme} {
+	for _, add := range []func(*runtime.Scheme) error{clientgoscheme.AddToScheme, tadossv1.AddToScheme, cnpgv1.AddToScheme, monitoringv1.AddToScheme} {
 		if err := add(scheme); err != nil {
 			panic(err)
 		}

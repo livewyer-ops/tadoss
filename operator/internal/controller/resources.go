@@ -6,6 +6,7 @@ import (
 	"github.com/livewyer-ops/tadoss/operator/internal/controller/resource"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 )
 
 const (
@@ -24,6 +25,9 @@ const (
 )
 
 func replicas(t *tadossv1.Tadoss) int32 {
+	if t.Spec.API.Autoscaling.Enabled {
+		return ptr.Deref(t.Spec.API.Autoscaling.MinReplicas, 2)
+	}
 	if t.Spec.API.ReplicaCount != nil {
 		return *t.Spec.API.ReplicaCount
 	}

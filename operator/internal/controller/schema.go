@@ -70,6 +70,9 @@ func schemaJob(t *tadossv1.Tadoss, databaseSecret, checksum string) *batchv1.Job
 	container := &template.Spec.Containers[0]
 	container.Name = "schema"
 	container.Command = []string{"tadoss", "migrate", "--target", t.Status.Resolved.SchemaTarget}
+	if t.Spec.Backends.DB.CNPG.Pooler.Enabled {
+		setContainerEnv(container, corev1.EnvVar{Name: "TADOSS_DATABASE_HOST", Value: ""})
+	}
 	container.Env = slices.DeleteFunc(container.Env, func(env corev1.EnvVar) bool {
 		return env.Name == "TADOSS_HOST" || apiAuthEnv(env)
 	})

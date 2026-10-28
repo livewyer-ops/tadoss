@@ -32,7 +32,7 @@ func newNamespace(t *testing.T) string {
 func newInstance(namespace, name string, protected bool) *tadossv1.Tadoss {
 	return &tadossv1.Tadoss{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
-		Spec:       tadossv1.TadossSpec{Version: "0.1.0-rc1", Profile: tadossv1.ProfileLocalKind, API: tadossv1.WorkloadSpec{Image: "livewyer/tadoss-api:test"}, DeletionProtection: ptr.To(protected)},
+		Spec:       tadossv1.TadossSpec{Version: "0.1.0-rc1", Profile: tadossv1.ProfileLocalKind, API: tadossv1.APIWorkloadSpec{WorkloadSpec: tadossv1.WorkloadSpec{Image: "livewyer/tadoss-api:test"}}, DeletionProtection: ptr.To(protected)},
 	}
 }
 

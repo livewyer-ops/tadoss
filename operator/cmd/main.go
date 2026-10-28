@@ -9,6 +9,7 @@ import (
 	tadossv1 "github.com/livewyer-ops/tadoss/operator/api/v1alpha1"
 	"github.com/livewyer-ops/tadoss/operator/internal/controller"
 	"github.com/livewyer-ops/tadoss/operator/internal/controller/defaults"
+	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -41,6 +42,7 @@ func main() {
 	must(clientgoscheme.AddToScheme(scheme))
 	must(tadossv1.AddToScheme(scheme))
 	must(cnpgv1.AddToScheme(scheme))
+	must(monitoringv1.AddToScheme(scheme))
 	metricsOptions := metricsserver.Options{BindAddress: metrics, SecureServing: metricsSecure}
 	if metricsSecure {
 		metricsOptions.FilterProvider = filters.WithAuthenticationAndAuthorization

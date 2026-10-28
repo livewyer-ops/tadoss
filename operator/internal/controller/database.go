@@ -102,9 +102,21 @@ func databaseCluster(t *tadossv1.Tadoss) *cnpgv1.Cluster {
 				corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("128Mi")},
 				corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("1Gi")}),
 			EnableSuperuserAccess: ptr.To(false),
+			PostgresConfiguration: *t.Spec.Backends.DB.CNPG.Postgresql.DeepCopy(),
 		},
 	}
 	config := t.Spec.Backends.DB.CNPG
+	if config.Affinity != nil {
+		cluster.Spec.Affinity = *config.Affinity.DeepCopy()
+	} else if t.Spec.Profile == tadossv1.ProfileMultiServer {
+		cluster.Spec.Affinity.EnablePodAntiAffinity = ptr.To(true)
+		cluster.Spec.Affinity.PodAntiAffinityType = cnpgv1.PodAntiAffinityTypeRequired
+	}
+	// Keep Pooler SANs during disable/enable transitions and in-flight connections.
+	{
+		name := t.Name + "-pooler"
+		cluster.Spec.Certificates = &cnpgv1.CertificatesConfiguration{ServerAltDNSNames: []string{name, name + "." + t.Namespace, name + "." + t.Namespace + ".svc", name + "." + t.Namespace + ".svc.cluster.local"}}
+	}
 	if config.Backup.Enabled {
 		cluster.Spec.Backup = &cnpgv1.BackupConfiguration{BarmanObjectStore: config.Backup.ObjectStore, RetentionPolicy: config.Backup.RetentionPolicy}
 	}

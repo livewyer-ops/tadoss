@@ -16,13 +16,17 @@ repositories:
     url: https://traefik.github.io/charts
   - name: jetstack
     url: https://charts.jetstack.io
+  - name: prometheus-community
+    url: https://prometheus-community.github.io/helm-charts
+  - name: metrics-server
+    url: https://kubernetes-sigs.github.io/metrics-server
 
 helmDefaults:
   createNamespace: true
   wait: true
   waitForJobs: true
   timeout: {{ $v.platform.timeoutSeconds }}
-  syncArgs: [--server-side=true]
+  syncArgs: [--server-side=true, --description=TADOSS-platform]
   diffArgs: [--server-side=true]
 
 releases:
@@ -30,9 +34,26 @@ releases:
   - name: cnpg
     namespace: cnpg-system
     chart: cloudnative-pg/cloudnative-pg
-    version: 0.28.2
+    version: 0.29.1
     values:
       - {{ toYaml $v.platform.cnpg.values | nindent 8 }}
+{{- end }}
+{{- if $v.platform.metricsServer.enabled }}
+  - name: metrics-server
+    namespace: kube-system
+    chart: metrics-server/metrics-server
+    version: 3.13.0
+    values:
+      - {{ toYaml $v.platform.metricsServer.values | nindent 8 }}
+{{- end }}
+{{- if $v.platform.monitoring.enabled }}
+  - name: tadoss-monitoring
+    namespace: monitoring
+    chart: prometheus-community/kube-prometheus-stack
+    version: 83.4.0
+    values:
+      - monitoring-values.yaml
+      - {{ toYaml $v.platform.monitoring.values | nindent 8 }}
 {{- end }}
 {{- if $v.platform.traefik.enabled }}
   - name: traefik

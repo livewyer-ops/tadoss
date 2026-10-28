@@ -6,6 +6,7 @@ import (
 	cnpgv1 "github.com/cloudnative-pg/cloudnative-pg/api/v1"
 	tadossv1 "github.com/livewyer-ops/tadoss/operator/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -27,13 +28,13 @@ func (r *TadossReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	terminating := builder.WithPredicates(predicate.NewPredicateFuncs(func(o client.Object) bool { return !o.GetDeletionTimestamp().IsZero() }))
 	b := ctrl.NewControllerManagedBy(mgr).For(&tadossv1.Tadoss{}, builder.WithPredicates(primaryResourcePredicate(nil))).
-		Owns(&appsv1.Deployment{}).Owns(&batchv1.Job{}).Owns(&corev1.Service{}).
+		Owns(&appsv1.Deployment{}).Owns(&autoscalingv2.HorizontalPodAutoscaler{}).Owns(&batchv1.Job{}).Owns(&corev1.Service{}).
 		Owns(&networkingv1.Ingress{}).Owns(&networkingv1.NetworkPolicy{}).Owns(&policyv1.PodDisruptionBudget{}).
 		WatchesMetadata(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.secretRequests)).
 		WatchesMetadata(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.secretRequests)).
 		WatchesMetadata(&corev1.Namespace{}, handler.EnqueueRequestsFromMapFunc(r.namespaceRequests), terminating)
 	if _, err := mgr.GetRESTMapper().RESTMapping(cnpgv1.SchemeGroupVersion.WithKind("Cluster").GroupKind(), "v1"); err == nil {
-		b = b.Owns(&cnpgv1.Cluster{}).Owns(&cnpgv1.ScheduledBackup{})
+		b = b.Owns(&cnpgv1.Cluster{}).Owns(&cnpgv1.ScheduledBackup{}).Owns(&cnpgv1.Pooler{})
 	}
 	return b.Complete(r)
 }

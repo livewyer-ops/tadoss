@@ -5,3 +5,53 @@ metadata:
   namespace: tads
 spec:
   version: 0.1.0-rc2
+  api:
+    autoscaling:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 8
+    resources:
+      requests: {cpu: '1', memory: 1Gi}
+      limits: {cpu: '1', memory: 1Gi}
+    env:
+      TADOSS_POOL_MAX_SIZE: '10'
+      TADOSS_MAX_INFLIGHT_REQUESTS: '64'
+  worker:
+    replicaCount: 2
+    resources:
+      requests: {cpu: 250m, memory: 256Mi}
+      limits: {cpu: '1', memory: 512Mi}
+    env:
+      TADOSS_POOL_MAX_SIZE: '10'
+  backends:
+    db:
+      cnpg:
+        instances: 3
+        storage: 100Gi
+        resources:
+          requests: {cpu: '2', memory: 8Gi}
+          limits: {cpu: '2', memory: 8Gi}
+        pooler:
+          enabled: true
+          instances: 2
+          serverConnections: 16
+          maxClientConnections: 200
+        postgresql:
+          synchronous:
+            method: any
+            number: 1
+            dataDurability: required
+            failoverQuorum: true
+          parameters:
+            synchronous_commit: 'on'
+            max_connections: '100'
+            shared_buffers: 2GB
+            effective_cache_size: 6GB
+            work_mem: 8MB
+            maintenance_work_mem: 256MB
+            max_wal_size: 4GB
+            checkpoint_completion_target: '0.9'
+            track_io_timing: 'on'
+            track_wal_io_timing: 'on'
+            pg_stat_statements.max: '10000'
+            pg_stat_statements.track: all

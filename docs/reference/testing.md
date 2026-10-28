@@ -35,6 +35,8 @@ Chainsaw uses native assertions and bindings for Kubernetes polling, certificate
 
 ## Performance qualification
 
+For deployed multi-server tests, monitoring setup, open arrival-rate workloads and failover ledgers, use the [high-load qualification guide](../how-to/high-load.md). `task test:cluster` requires a disposable namespace and verifies HTTPS/OAuth and actual Prometheus discovery before exercising it.
+
 Run `task test:performance -- --worker` to benchmark a separate API process against a temporary PostgreSQL schema. The harness creates a local RSA/JWKS issuer and uses bearer tokens; `--worker` also starts a worker and webhook receiver. Child processes stop before the temporary schema is removed, including on failure. `TADOSS_TEST_DATABASE` selects the test database. The harness never targets an existing API deployment.
 
 The default dataset contains eight tracks with 1,000 events and 256-byte text payloads each. Workloads cover forward keyset pages, timerange reads, updates of 1/100/1,000 existing events, writes to a shared track, and a 75% read / 25% write mix. These are update benchmarks; fixture insertion is outside the measurements. `--payload-bytes`, `--events`, `--tracks`, `--pool-size`, `--cases` and `--concurrency` select the dataset and load. Each workload warms up, then runs three measured repetitions by default. HTTP errors, transport errors and per-event failures make the command fail while retaining its report.
